@@ -78,6 +78,21 @@ static void whip_dtls_connection_state(GstElement *dtls, GParamSpec *pspec,
 static void whip_connect(GstWebRTCSessionDescription *offer);
 static void whip_disconnect(char *reason);
 
+/* Helper struct to handle libsoup HTTP sessions */
+typedef struct whip_http_session {
+	/* libsoup HTTP session */
+	SoupSession *http_conn;
+	/* libsoup HTTP message */
+	SoupMessage *msg;
+	/* Redirect url */
+	char *redirect_url;
+	/* Number of redirects happened so far */
+	guint redirects;
+} whip_http_session;
+/* Helper method to send HTTP messages */
+guint whip_http_send(whip_http_session *session, char *method,
+	char *url, char *payload, char *content_type);
+
 
 /* Signal handler */
 static volatile gint stop = 0, disconnected = 0;
@@ -365,28 +380,14 @@ static void whip_send_candidate(char *json_candidate) {
 	/* Send the candidate via a PATCH message */
 	WHIP_LOG(LOG_VERB, WHIP_PREFIX "Sending candidate: %s\n", json_candidate);
 	/* Create an HTTP connection */
-	SoupSession *http_conn = soup_session_new_with_options(
-		SOUP_SESSION_SSL_STRICT, FALSE,
-		SOUP_SESSION_SSL_USE_SYSTEM_CA_FILE, TRUE, NULL
-	);
-	SoupMessage *msg = soup_message_new("PATCH", resource_url);
-	soup_message_set_request(msg, "application/trickle-ice-sdpfrag", SOUP_MEMORY_COPY,
-		json_candidate, strlen(json_candidate));
-	g_free(json_candidate);
-	if(token != NULL) {
-		/* Add an authorization header too */
-		char auth[1024];
-		g_snprintf(auth, sizeof(auth), "Bearer %s", token);
-		soup_message_headers_append(msg->request_headers, "Authorization", auth);
-	}
-	/* Send the message synchronously */
-	guint status = soup_session_send_message(http_conn, msg);
+	whip_http_session session = { 0 };
+	guint status = whip_http_send(&session, "PATCH", resource_url, json_candidate, "application/trickle-ice-sdpfrag");
 	if(status != 200) {
 		/* Couldn't trickle? */
-		WHIP_LOG(LOG_WARN, " [trickle] %u %s\n", status, msg->reason_phrase);
+		WHIP_LOG(LOG_WARN, " [trickle] %u %s\n", status, status ? session.msg->reason_phrase : "HTTP error");
 	}
-	g_object_unref(msg);
-	g_object_unref(http_conn);
+	g_object_unref(session.msg);
+	g_object_unref(session.http_conn);
 }
 
 /* Callback invoked when the connection state changes */
@@ -475,47 +476,35 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 	WHIP_LOG(LOG_VERB, "%s\n", sdp_offer);
 
 	/* Create an HTTP connection */
-	SoupSession *http_conn = soup_session_new_with_options(
-		SOUP_SESSION_SSL_STRICT, FALSE,
-		SOUP_SESSION_SSL_USE_SYSTEM_CA_FILE, TRUE, NULL
-	);
-	SoupMessage *msg = soup_message_new("POST", server_url);
-	soup_message_set_request(msg, "application/sdp", SOUP_MEMORY_COPY, sdp_offer, strlen(sdp_offer));
-	if(token != NULL) {
-		/* Add an authorization header too */
-		char auth[1024];
-		g_snprintf(auth, sizeof(auth), "Bearer %s", token);
-		soup_message_headers_append(msg->request_headers, "Authorization", auth);
-	}
-	/* Send the message synchronously */
-	guint status = soup_session_send_message(http_conn, msg);
+	whip_http_session session = { 0 };
+	guint status = whip_http_send(&session, "POST", (char *)server_url, sdp_offer, "application/sdp");
 	if(status != 201) {
 		/* Didn't get the success we were expecting */
-		WHIP_LOG(LOG_ERR, " [%u] %s\n", status, msg->reason_phrase);
-		g_object_unref(msg);
-		g_object_unref(http_conn);
+		WHIP_LOG(LOG_ERR, " [%u] %s\n", status, status ? session.msg->reason_phrase : "HTTP error");
+		g_object_unref(session.msg);
+		g_object_unref(session.http_conn);
 		whip_disconnect("HTTP error");
 		return;
 	}
 	/* Get the response */
-	const char *content_type = soup_message_headers_get_content_type(msg->response_headers, NULL);
+	const char *content_type = soup_message_headers_get_content_type(session.msg->response_headers, NULL);
 	if(content_type == NULL || strcasecmp(content_type, "application/sdp")) {
 		WHIP_LOG(LOG_ERR, "Unexpected content-type '%s'\n", content_type);
-		g_object_unref(msg);
-		g_object_unref(http_conn);
+		g_object_unref(session.msg);
+		g_object_unref(session.http_conn);
 		whip_disconnect("HTTP error");
 		return;
 	}
-	const char *answer = msg->response_body ? msg->response_body->data : NULL;
+	const char *answer = session.msg->response_body ? session.msg->response_body->data : NULL;
 	if(answer == NULL || strstr(answer, "v=0\r\n") != answer) {
 		WHIP_LOG(LOG_ERR, "Missing or invalid SDP answer\n");
-		g_object_unref(msg);
-		g_object_unref(http_conn);
+		g_object_unref(session.msg);
+		g_object_unref(session.http_conn);
 		whip_disconnect("SDP error");
 		return;
 	}
 	/* Parse the location header to populate the resource url */
-	const char *location = soup_message_headers_get_one(msg->response_headers, "location");
+	const char *location = soup_message_headers_get_one(session.msg->response_headers, "location");
 	if(strstr(location, "http")) {
 		/* Easy enough */
 		resource_url = g_strdup(location);
@@ -571,14 +560,14 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 	if(ret != GST_SDP_OK) {
 		/* Something went wrong */
 		WHIP_LOG(LOG_ERR, "Error initializing SDP object (%d)\n", ret);
-		g_object_unref(msg);
-		g_object_unref(http_conn);
+		g_object_unref(session.msg);
+		g_object_unref(session.http_conn);
 		whip_disconnect("SDP error");
 		return;
 	}
 	ret = gst_sdp_message_parse_buffer((guint8 *)answer, strlen(answer), sdp);
-	g_object_unref(msg);
-	g_object_unref(http_conn);
+	g_object_unref(session.msg);
+	g_object_unref(session.http_conn);
 	if(ret != GST_SDP_OK) {
 		/* Something went wrong */
 		WHIP_LOG(LOG_ERR, "Error parsing SDP buffer (%d)\n", ret);
@@ -606,26 +595,70 @@ static void whip_disconnect(char *reason) {
 	}
 
 	/* Create an HTTP connection */
-	SoupSession *http_conn = soup_session_new_with_options(
+	whip_http_session session = { 0 };
+	guint status = whip_http_send(&session, "DELETE", resource_url, NULL, NULL);
+	if(status != 200) {
+		WHIP_LOG(LOG_WARN, " [%u] %s\n", status, status ? session.msg->reason_phrase : "HTTP error");
+	}
+	g_free(resource_url);
+	g_object_unref(session.msg);
+	g_object_unref(session.http_conn);
+
+	/* Done */
+	g_main_loop_quit(loop);
+}
+
+/* Helper method to send HTTP messages */
+guint whip_http_send(whip_http_session *session, char *method,
+		char *url, char *payload, char *content_type) {
+	if(session == NULL || method == NULL || url == NULL) {
+		WHIP_LOG(LOG_ERR, "Invalid arguments...\n");
+		return 0;
+	}
+	/* Create an HTTP connection */
+	session->http_conn = soup_session_new_with_options(
 		SOUP_SESSION_SSL_STRICT, FALSE,
 		SOUP_SESSION_SSL_USE_SYSTEM_CA_FILE, TRUE, NULL
 	);
-	SoupMessage *msg = soup_message_new("DELETE", resource_url);
+	session->msg = soup_message_new(method, session->redirect_url ? session->redirect_url : url);
+	soup_message_set_flags(session->msg, SOUP_MESSAGE_NO_REDIRECT);
+	if(payload != NULL && content_type != NULL)
+		soup_message_set_request(session->msg, content_type, SOUP_MEMORY_COPY, payload, strlen(payload));
 	if(token != NULL) {
 		/* Add an authorization header too */
 		char auth[1024];
 		g_snprintf(auth, sizeof(auth), "Bearer %s", token);
-		soup_message_headers_append(msg->request_headers, "Authorization", auth);
+		soup_message_headers_append(session->msg->request_headers, "Authorization", auth);
 	}
 	/* Send the message synchronously */
-	guint status = soup_session_send_message(http_conn, msg);
-	if(status != 200) {
-		WHIP_LOG(LOG_WARN, " [%u] %s\n", status, msg->reason_phrase);
+	guint status = soup_session_send_message(session->http_conn, session->msg);
+	if(status == 301 || status == 307) {
+		/* Redirected? Let's try again */
+		session->redirects++;
+		if(session->redirects > 10) {
+			/* Redirected too many times, give up... */
+			WHIP_LOG(LOG_ERR, "Too many redirects, giving up...\n");
+			return 0;
+		}
+		g_free(session->redirect_url);
+		const char *location = soup_message_headers_get_one(session->msg->response_headers, "location");
+		if(strstr(location, "http")) {
+			/* Easy enough */
+			session->redirect_url = g_strdup(location);
+		} else {
+			/* Relative path */
+			SoupURI *uri = soup_uri_new(server_url);
+			soup_uri_set_path(uri, location);
+			session->redirect_url = soup_uri_to_string(uri, FALSE);
+			soup_uri_free(uri);
+		}
+		WHIP_LOG(LOG_INFO, "  -- Redirected to %s\n", session->redirect_url);
+		g_object_unref(session->msg);
+		g_object_unref(session->http_conn);
+		return whip_http_send(session, method, url, payload, content_type);
 	}
-	g_free(resource_url);
-	g_object_unref(msg);
-	g_object_unref(http_conn);
-
-	/* Done */
-	g_main_loop_quit(loop);
+	/* If we got here, we're done */
+	g_free(session->redirect_url);
+	session->redirect_url = NULL;
+	return status;
 }
