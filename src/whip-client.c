@@ -58,6 +58,7 @@ static const char *stun_server = NULL, *turn_server = NULL;
 static enum whip_state state = 0;
 static const char *server_url = NULL, *token = NULL;
 static char *resource_url = NULL;
+static GList *candidates = NULL;
 
 /* Helper methods and callbacks */
 static gboolean whip_check_plugins(void);
@@ -67,6 +68,7 @@ static void whip_negotiation_needed(GstElement *element, gpointer user_data);
 static void whip_offer_available(GstPromise *promise, gpointer user_data);
 static void whip_candidate(GstElement *webrtc G_GNUC_UNUSED,
 	guint mlineindex, char *candidate, gpointer user_data G_GNUC_UNUSED);
+static void whip_send_candidate(char *json_candidate);
 static void whip_connection_state(GstElement *webrtc, GParamSpec *pspec,
 	gpointer user_data G_GNUC_UNUSED);
 static void whip_ice_connection_state(GstElement *webrtc, GParamSpec *pspec,
@@ -346,6 +348,20 @@ static void whip_candidate(GstElement *webrtc G_GNUC_UNUSED,
 	char *json_candidate = whip_json_to_string(c);
 	json_object_unref(c);
 
+	/* If we don't have a resource url yet, we'll send it later */
+	if(resource_url == NULL) {
+		WHIP_LOG(LOG_INFO, "  -- Still waiting for an answer, storing candidate...\n");
+		candidates = g_list_append(candidates, json_candidate);
+		return;
+	}
+	/* Send it now */
+	whip_send_candidate(json_candidate);
+}
+
+/* Helper method to send candidates via HTTP PATCH */
+static void whip_send_candidate(char *json_candidate) {
+	if(json_candidate == NULL)
+		return;
 	/* Send the candidate via a PATCH message */
 	WHIP_LOG(LOG_VERB, WHIP_PREFIX "Sending candidate: %s\n", json_candidate);
 	/* Create an HTTP connection */
@@ -353,7 +369,7 @@ static void whip_candidate(GstElement *webrtc G_GNUC_UNUSED,
 		SOUP_SESSION_SSL_STRICT, FALSE,
 		SOUP_SESSION_SSL_USE_SYSTEM_CA_FILE, TRUE, NULL
 	);
-	SoupMessage *msg = soup_message_new("PATCH", server_url);
+	SoupMessage *msg = soup_message_new("PATCH", resource_url);
 	soup_message_set_request(msg, "application/trickle-ice-sdpfrag", SOUP_MEMORY_COPY,
 		json_candidate, strlen(json_candidate));
 	g_free(json_candidate);
@@ -511,6 +527,17 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 		soup_uri_free(uri);
 	}
 	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Resource URL: %s\n", resource_url);
+	/* Check if we have pending candidates to send, now that we know the resource url */
+	if(candidates != NULL) {
+		WHIP_LOG(LOG_INFO, WHIP_PREFIX "  -- Sending %u pending candidates\n", g_list_length(candidates));
+		GList *temp = candidates;
+		while(temp) {
+			char *json_candidate = (char *)temp->data;
+			whip_send_candidate(json_candidate);
+		}
+		g_list_free_full(candidates, g_free);
+		candidates = NULL;
+	}
 
 	/* Process the SDP answer */
 	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Received SDP answer (%zu bytes)\n", strlen(answer));
