@@ -342,7 +342,10 @@ static void whip_candidate(GstElement *webrtc G_GNUC_UNUSED,
 	/* Send the candidate via a PATCH message */
 	WHIP_LOG(LOG_VERB, WHIP_PREFIX "Sending candidate: %s\n", json_candidate);
 	/* Create an HTTP connection */
-	SoupSession *http_conn = soup_session_new();
+	SoupSession *http_conn = soup_session_new_with_options(
+		SOUP_SESSION_SSL_STRICT, FALSE,
+		SOUP_SESSION_SSL_USE_SYSTEM_CA_FILE, TRUE, NULL
+	);
 	SoupMessage *msg = soup_message_new("PATCH", server_url);
 	soup_message_set_request(msg, "application/trickle-ice-sdpfrag", SOUP_MEMORY_COPY,
 		json_candidate, strlen(json_candidate));
@@ -423,7 +426,10 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 	WHIP_LOG(LOG_VERB, "%s\n", sdp_offer);
 
 	/* Create an HTTP connection */
-	SoupSession *http_conn = soup_session_new();
+	SoupSession *http_conn = soup_session_new_with_options(
+		SOUP_SESSION_SSL_STRICT, FALSE,
+		SOUP_SESSION_SSL_USE_SYSTEM_CA_FILE, TRUE, NULL
+	);
 	SoupMessage *msg = soup_message_new("POST", server_url);
 	soup_message_set_request(msg, "application/sdp", SOUP_MEMORY_COPY, sdp_offer, strlen(sdp_offer));
 	if(token != NULL) {
@@ -539,7 +545,10 @@ static void whip_disconnect(char *reason) {
 	}
 
 	/* Create an HTTP connection */
-	SoupSession *http_conn = soup_session_new();
+	SoupSession *http_conn = soup_session_new_with_options(
+		SOUP_SESSION_SSL_STRICT, FALSE,
+		SOUP_SESSION_SSL_USE_SYSTEM_CA_FILE, TRUE, NULL
+	);
 	SoupMessage *msg = soup_message_new("DELETE", resource_url);
 	if(token != NULL) {
 		/* Add an authorization header too */
