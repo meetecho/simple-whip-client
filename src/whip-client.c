@@ -71,12 +71,14 @@ static void whip_connection_state(GstElement *webrtc, GParamSpec *pspec,
 	gpointer user_data G_GNUC_UNUSED);
 static void whip_ice_connection_state(GstElement *webrtc, GParamSpec *pspec,
 	gpointer user_data G_GNUC_UNUSED);
+static void whip_dtls_connection_state(GstElement *dtls, GParamSpec *pspec,
+	gpointer user_data G_GNUC_UNUSED);
 static void whip_connect(GstWebRTCSessionDescription *offer);
 static void whip_disconnect(char *reason);
 
 
 /* Signal handler */
-static volatile gint stop = 0;
+static volatile gint stop = 0, disconnected = 0;
 static void whip_handle_signal(int signum) {
 	WHIP_LOG(LOG_INFO, "Stopping the WHIP client...\n");
 	if(g_atomic_int_compare_and_exchange(&stop, 0, 1)) {
@@ -319,6 +321,10 @@ static void whip_offer_available(GstPromise *promise, gpointer user_data) {
 	gst_promise_interrupt(promise);
 	gst_promise_unref(promise);
 
+	/* Now that a DTLS stack is available, try monitoring the DTLS state too */
+	GstElement *dtls = gst_bin_get_by_name(GST_BIN(pc), "dtlsdec0");
+	g_signal_connect(dtls, "notify::connection-state", G_CALLBACK(whip_dtls_connection_state), NULL);
+
 	/* Now that the offer is ready, connect to the WHIP endpoint and send it there */
 	whip_connect(offer);
 	gst_webrtc_session_description_free(offer);
@@ -413,6 +419,32 @@ static void whip_ice_connection_state(GstElement *webrtc, GParamSpec *pspec,
 			break;
 		case 0:
 		case 5:
+		default:
+			/* We don't care (we should in case of restarts?) */
+			break;
+	}
+}
+
+/* Callback invoked when the DTLS connection state changes */
+static void whip_dtls_connection_state(GstElement *dtls, GParamSpec *pspec,
+		gpointer user_data G_GNUC_UNUSED) {
+	guint state = 0;
+	g_object_get(dtls, "connection-state", &state, NULL);
+	switch(state) {
+		case 1:
+			WHIP_LOG(LOG_INFO, WHIP_PREFIX "DTLS connection closed\n");
+			whip_disconnect("PeerConnection closed");
+			break;
+		case 2:
+			WHIP_LOG(LOG_ERR, WHIP_PREFIX "DTLS failed\n");
+			whip_disconnect("DTLS failed");
+			break;
+		case 3:
+			WHIP_LOG(LOG_INFO, WHIP_PREFIX "DTLS connecting...\n");
+			break;
+		case 4:
+			WHIP_LOG(LOG_INFO, WHIP_PREFIX "DTLS connected\n");
+			break;
 		default:
 			/* We don't care (we should in case of restarts?) */
 			break;
@@ -537,7 +569,8 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 
 /* Helper method to disconnect from the WHIP endpoint */
 static void whip_disconnect(char *reason) {
-	/* TODO*/
+	if(!g_atomic_int_compare_and_exchange(&disconnected, 0, 1))
+		return;
 	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Disconnecting from server (%s)\n", reason);
 	if(resource_url == NULL) {
 		/* FIXME Nothing to do? */
