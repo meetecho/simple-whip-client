@@ -60,7 +60,7 @@ static char *resource_url = NULL;
 
 /* Trickle ICE management */
 static char *ice_ufrag = NULL, *ice_pwd = NULL;
-static GList *candidates = NULL;
+static GAsyncQueue *candidates = NULL;
 
 /* Helper methods and callbacks */
 static gboolean whip_check_plugins(void);
@@ -69,7 +69,7 @@ static void whip_negotiation_needed(GstElement *element, gpointer user_data);
 static void whip_offer_available(GstPromise *promise, gpointer user_data);
 static void whip_candidate(GstElement *webrtc G_GNUC_UNUSED,
 	guint mlineindex, char *candidate, gpointer user_data G_GNUC_UNUSED);
-static void whip_send_candidate(char *candidate);
+static gboolean whip_send_candidates(gpointer user_data);
 static void whip_connection_state(GstElement *webrtc, GParamSpec *pspec,
 	gpointer user_data G_GNUC_UNUSED);
 static void whip_ice_gathering_state(GstElement *webrtc, GParamSpec *pspec,
@@ -194,6 +194,7 @@ int main(int argc, char *argv[]) {
 	g_free(resource_url);
 	g_free(ice_ufrag);
 	g_free(ice_pwd);
+	g_async_queue_unref(candidates);
 
 	WHIP_LOG(LOG_INFO, "\nBye!\n");
 	exit(0);
@@ -276,7 +277,8 @@ static gboolean whip_initialize(void) {
 	g_signal_connect(pc, "notify::connection-state", G_CALLBACK(whip_connection_state), NULL);
 	g_signal_connect(pc, "notify::ice-gathering-state", G_CALLBACK(whip_ice_gathering_state), NULL);
 	g_signal_connect(pc, "notify::ice-connection-state", G_CALLBACK(whip_ice_connection_state), NULL);
-	/* FIXME What about the DTLS state? */
+	/* Create a queue for gathered candidates */
+	candidates = g_async_queue_new_full((GDestroyNotify)g_free);
 
 	/* Start the pipeline */
 	gst_element_set_state(pipeline, GST_STATE_READY);
@@ -365,30 +367,29 @@ static void whip_candidate(GstElement *webrtc G_GNUC_UNUSED,
 		/* We're bundling, so we don't care */
 		return;
 	}
-	/* If we don't have a resource url yet, we'll send it later */
-	if(resource_url == NULL) {
-		WHIP_LOG(LOG_INFO, "  -- Still waiting for an answer, storing candidate...\n");
-		candidates = g_list_append(candidates, g_strdup(candidate));
-		return;
-	}
-	/* Send it now */
-	whip_send_candidate(candidate);
+	/* Keep track of the candidate, we'll send it later when the timer fires */
+	g_async_queue_push(candidates, g_strdup(candidate));
 }
 
 /* Helper method to send candidates via HTTP PATCH */
-static void whip_send_candidate(char *candidate) {
-	if(candidate == NULL)
-		return;
-	/* Send the candidate via a PATCH message */
-	WHIP_LOG(LOG_VERB, WHIP_PREFIX "Sending candidate: %s\n", candidate);
+static gboolean whip_send_candidates(gpointer user_data) {
+	if(candidates == NULL || g_async_queue_length(candidates) == 0)
+		return TRUE;
 	/* Prepare the fragment to send (credentials + fake mline + candidate) */
 	char fragment[1024];
 	g_snprintf(fragment, sizeof(fragment),
 		"a=ice-ufrag:%s\r\n"
 		"a=ice-pwd:%s\r\n"
-		"m=%s 9 RTP/AVP 0\r\n"
-		"a=%s\r\n", ice_ufrag, ice_pwd, audio_pipe ? "audio" : "video", candidate);
-	/* Create an HTTP connection */
+		"m=%s 9 RTP/AVP 0\r\n", ice_ufrag, ice_pwd, audio_pipe ? "audio" : "video");
+	char *candidate = NULL;
+	while((candidate = g_async_queue_try_pop(candidates)) != NULL) {
+		WHIP_LOG(LOG_VERB, WHIP_PREFIX "Sending candidates: %s\n", candidate);
+		g_strlcat(fragment, "a=", sizeof(fragment));
+		g_strlcat(fragment, candidate, sizeof(fragment));
+		g_strlcat(fragment, "\r\n", sizeof(fragment));
+		g_free(candidate);
+	}
+	/* Send the candidate via a PATCH message */
 	whip_http_session session = { 0 };
 	guint status = whip_http_send(&session, "PATCH", resource_url, fragment, "application/trickle-ice-sdpfrag");
 	if(status != 200) {
@@ -397,6 +398,10 @@ static void whip_send_candidate(char *candidate) {
 	}
 	g_object_unref(session.msg);
 	g_object_unref(session.http_conn);
+	/* If the candidates we sent included an end-of-candidates, let's stop here */
+	if(strstr(fragment, "end-of-candidates") != NULL)
+		return FALSE;
+	return TRUE;
 }
 
 /* Callback invoked when the connection state changes */
@@ -436,7 +441,7 @@ static void whip_ice_gathering_state(GstElement *webrtc, GParamSpec *pspec,
 		case 2:
 			WHIP_LOG(LOG_INFO, WHIP_PREFIX "ICE gathering completed\n");
 			/* Send an a=end-of-candidates trickle */
-			whip_send_candidate("end-of-candidates");
+			g_async_queue_push(candidates, g_strdup("end-of-candidates"));
 			break;
 		default:
 			break;
@@ -562,18 +567,13 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 		soup_uri_free(uri);
 	}
 	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Resource URL: %s\n", resource_url);
-	/* Check if we have pending candidates to send, now that we know the resource url */
-	if(candidates != NULL) {
-		WHIP_LOG(LOG_INFO, WHIP_PREFIX "  -- Sending %u pending candidates\n", g_list_length(candidates));
-		GList *temp = candidates;
-		while(temp) {
-			char *candidate = (char *)temp->data;
-			/* FIXME rather than sending all candidates individually, we could group them */
-			whip_send_candidate(candidate);
-		}
-		g_list_free_full(candidates, g_free);
-		candidates = NULL;
-	}
+	/* Now that we know the resource url, prepare the timer to send trickle candidates:
+	 * since most candidates will be local, rather than sending an HTTP PATCH message as
+	 * soon as we're aware of it, we queue it, and we send a (grouped) message every ~100ms */
+	GSource *patch_timer = g_timeout_source_new(100);
+	g_source_set_callback(patch_timer, whip_send_candidates, NULL, NULL);
+	g_source_attach(patch_timer, NULL);
+	g_source_unref(patch_timer);
 
 	/* Process the SDP answer */
 	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Received SDP answer (%zu bytes)\n", strlen(answer));
