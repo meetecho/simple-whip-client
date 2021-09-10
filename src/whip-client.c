@@ -72,6 +72,8 @@ static void whip_candidate(GstElement *webrtc G_GNUC_UNUSED,
 static void whip_send_candidate(char *candidate);
 static void whip_connection_state(GstElement *webrtc, GParamSpec *pspec,
 	gpointer user_data G_GNUC_UNUSED);
+static void whip_ice_gathering_state(GstElement *webrtc, GParamSpec *pspec,
+	gpointer user_data G_GNUC_UNUSED);
 static void whip_ice_connection_state(GstElement *webrtc, GParamSpec *pspec,
 	gpointer user_data G_GNUC_UNUSED);
 static void whip_dtls_connection_state(GstElement *dtls, GParamSpec *pspec,
@@ -272,6 +274,7 @@ static gboolean whip_initialize(void) {
 	g_signal_connect(pc, "on-ice-candidate", G_CALLBACK(whip_candidate), NULL);
 	/* We also add a couple of callbacks to be notified about connection state changes */
 	g_signal_connect(pc, "notify::connection-state", G_CALLBACK(whip_connection_state), NULL);
+	g_signal_connect(pc, "notify::ice-gathering-state", G_CALLBACK(whip_ice_gathering_state), NULL);
 	g_signal_connect(pc, "notify::ice-connection-state", G_CALLBACK(whip_ice_connection_state), NULL);
 	/* FIXME What about the DTLS state? */
 
@@ -421,6 +424,25 @@ static void whip_connection_state(GstElement *webrtc, GParamSpec *pspec,
 	}
 }
 
+/* Callback invoked when the ICE gathering state changes */
+static void whip_ice_gathering_state(GstElement *webrtc, GParamSpec *pspec,
+		gpointer user_data G_GNUC_UNUSED) {
+	guint state = 0;
+	g_object_get(webrtc, "ice-gathering-state", &state, NULL);
+	switch(state) {
+		case 1:
+			WHIP_LOG(LOG_INFO, WHIP_PREFIX "ICE gathering started...\n");
+			break;
+		case 2:
+			WHIP_LOG(LOG_INFO, WHIP_PREFIX "ICE gathering completed\n");
+			/* Send an a=end-of-candidates trickle */
+			whip_send_candidate("end-of-candidates");
+			break;
+		default:
+			break;
+	}
+}
+
 /* Callback invoked when the ICE connection state changes */
 static void whip_ice_connection_state(GstElement *webrtc, GParamSpec *pspec,
 		gpointer user_data G_GNUC_UNUSED) {
@@ -545,8 +567,9 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 		WHIP_LOG(LOG_INFO, WHIP_PREFIX "  -- Sending %u pending candidates\n", g_list_length(candidates));
 		GList *temp = candidates;
 		while(temp) {
-			char *json_candidate = (char *)temp->data;
-			whip_send_candidate(json_candidate);
+			char *candidate = (char *)temp->data;
+			/* FIXME rather than sending all candidates individually, we could group them */
+			whip_send_candidate(candidate);
 		}
 		g_list_free_full(candidates, g_free);
 		candidates = NULL;
