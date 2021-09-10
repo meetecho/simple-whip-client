@@ -21,9 +21,8 @@
 #define GST_USE_UNSTABLE_API
 #include <gst/webrtc/webrtc.h>
 
-/* HTTP/JSON stack (Janus API) */
+/* HTTP stack (WHIP API) */
 #include <libsoup/soup.h>
-#include <json-glib/json-glib.h>
 
 /* Local includes */
 #include "debug.h"
@@ -58,17 +57,19 @@ static const char *stun_server = NULL, *turn_server = NULL;
 static enum whip_state state = 0;
 static const char *server_url = NULL, *token = NULL;
 static char *resource_url = NULL;
+
+/* Trickle ICE management */
+static char *ice_ufrag = NULL, *ice_pwd = NULL;
 static GList *candidates = NULL;
 
 /* Helper methods and callbacks */
 static gboolean whip_check_plugins(void);
-static char *whip_json_to_string(JsonObject *object);
 static gboolean whip_initialize(void);
 static void whip_negotiation_needed(GstElement *element, gpointer user_data);
 static void whip_offer_available(GstPromise *promise, gpointer user_data);
 static void whip_candidate(GstElement *webrtc G_GNUC_UNUSED,
 	guint mlineindex, char *candidate, gpointer user_data G_GNUC_UNUSED);
-static void whip_send_candidate(char *json_candidate);
+static void whip_send_candidate(char *candidate);
 static void whip_connection_state(GstElement *webrtc, GParamSpec *pspec,
 	gpointer user_data G_GNUC_UNUSED);
 static void whip_ice_connection_state(GstElement *webrtc, GParamSpec *pspec,
@@ -188,6 +189,10 @@ int main(int argc, char *argv[]) {
 		gst_object_unref(pipeline);
 	}
 
+	g_free(resource_url);
+	g_free(ice_ufrag);
+	g_free(ice_pwd);
+
 	WHIP_LOG(LOG_INFO, "\nBye!\n");
 	exit(0);
 }
@@ -228,19 +233,6 @@ static gboolean whip_check_plugins(void) {
 		gst_object_unref(plugin);
 	}
 	return ret;
-}
-/* Helper method to serialize a JsonObject to a string */
-static char *whip_json_to_string(JsonObject *object) {
-	/* Make it the root node */
-	JsonNode *root = json_node_init_object(json_node_alloc(), object);
-	JsonGenerator *generator = json_generator_new();
-	json_generator_set_root(generator, root);
-	char *text = json_generator_to_data(generator, NULL);
-
-	/* Release everything */
-	g_object_unref(generator);
-	json_node_free(root);
-	return text;
 }
 
 /* Helper method to initialize the GStreamer WebRTC stack */
@@ -350,38 +342,52 @@ static void whip_offer_available(GstPromise *promise, gpointer user_data) {
 /* Callback invoked when a candidate to trickle becomes available */
 static void whip_candidate(GstElement *webrtc G_GNUC_UNUSED,
 		guint mlineindex, char *candidate, gpointer user_data G_GNUC_UNUSED) {
+	if(g_atomic_int_get(&stop) || g_atomic_int_get(&disconnected))
+		return;
 	/* Make sure we're in the right state*/
 	if(state < WHIP_STATE_OFFER_PREPARED) {
 		whip_disconnect("Can't trickle, not in a PeerConnection");
 		return;
 	}
-
-	/* Prepare the candidate JSON object */
-	JsonObject *c = json_object_new();
-	json_object_set_string_member(c, "candidate", candidate);
-	json_object_set_int_member(c, "sdpMLineIndex", mlineindex);
-	char *json_candidate = whip_json_to_string(c);
-	json_object_unref(c);
-
+	if(mlineindex != 0) {
+		/* We're bundling, so we don't care */
+		return;
+	}
+	int component = 0;
+	gchar **parts = g_strsplit(candidate, " ", -1);
+	if(parts[0] && parts[1])
+		component = atoi(parts[1]);
+	g_strfreev(parts);
+	if(component != 1) {
+		/* We're bundling, so we don't care */
+		return;
+	}
 	/* If we don't have a resource url yet, we'll send it later */
 	if(resource_url == NULL) {
 		WHIP_LOG(LOG_INFO, "  -- Still waiting for an answer, storing candidate...\n");
-		candidates = g_list_append(candidates, json_candidate);
+		candidates = g_list_append(candidates, g_strdup(candidate));
 		return;
 	}
 	/* Send it now */
-	whip_send_candidate(json_candidate);
+	whip_send_candidate(candidate);
 }
 
 /* Helper method to send candidates via HTTP PATCH */
-static void whip_send_candidate(char *json_candidate) {
-	if(json_candidate == NULL)
+static void whip_send_candidate(char *candidate) {
+	if(candidate == NULL)
 		return;
 	/* Send the candidate via a PATCH message */
-	WHIP_LOG(LOG_VERB, WHIP_PREFIX "Sending candidate: %s\n", json_candidate);
+	WHIP_LOG(LOG_VERB, WHIP_PREFIX "Sending candidate: %s\n", candidate);
+	/* Prepare the fragment to send (credentials + fake mline + candidate) */
+	char fragment[1024];
+	g_snprintf(fragment, sizeof(fragment),
+		"a=ice-ufrag:%s\r\n"
+		"a=ice-pwd:%s\r\n"
+		"m=%s 9 RTP/AVP 0\r\n"
+		"a=%s\r\n", ice_ufrag, ice_pwd, audio_pipe ? "audio" : "video", candidate);
 	/* Create an HTTP connection */
 	whip_http_session session = { 0 };
-	guint status = whip_http_send(&session, "PATCH", resource_url, json_candidate, "application/trickle-ice-sdpfrag");
+	guint status = whip_http_send(&session, "PATCH", resource_url, fragment, "application/trickle-ice-sdpfrag");
 	if(status != 200) {
 		/* Couldn't trickle? */
 		WHIP_LOG(LOG_WARN, " [trickle] %u %s\n", status, status ? session.msg->reason_phrase : "HTTP error");
@@ -474,6 +480,24 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 	char *sdp_offer = gst_sdp_message_as_text(offer->sdp);
 	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Sending SDP offer (%zu bytes)\n", strlen(sdp_offer));
 	WHIP_LOG(LOG_VERB, "%s\n", sdp_offer);
+
+	/* Take note of the ICE ufrag and pwd (we'll need them for trickles) */
+	char *ufrag = strstr(sdp_offer, "a=ice-ufrag:");
+	if(ufrag != NULL) {
+		ufrag += strlen("a=ice-ufrag:");
+		char *end = strstr(ufrag, "\r\n");
+		*end = '\0';
+		ice_ufrag = g_strdup(ufrag);
+		*end = '\r';
+	}
+	char *pwd = strstr(sdp_offer, "a=ice-pwd:");
+	if(pwd != NULL) {
+		pwd += strlen("a=ice-pwd:");
+		char *end = strstr(pwd, "\r\n");
+		*end = '\0';
+		ice_pwd = g_strdup(pwd);
+		*end = '\r';
+	}
 
 	/* Create an HTTP connection */
 	whip_http_session session = { 0 };
@@ -600,7 +624,6 @@ static void whip_disconnect(char *reason) {
 	if(status != 200) {
 		WHIP_LOG(LOG_WARN, " [%u] %s\n", status, status ? session.msg->reason_phrase : "HTTP error");
 	}
-	g_free(resource_url);
 	g_object_unref(session.msg);
 	g_object_unref(session.http_conn);
 
