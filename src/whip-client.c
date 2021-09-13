@@ -59,7 +59,7 @@ static const char *server_url = NULL, *token = NULL;
 static char *resource_url = NULL;
 
 /* Trickle ICE management */
-static char *ice_ufrag = NULL, *ice_pwd = NULL;
+static char *ice_ufrag = NULL, *ice_pwd = NULL, *first_mid = NULL;
 static GAsyncQueue *candidates = NULL;
 
 /* Helper methods and callbacks */
@@ -79,6 +79,7 @@ static void whip_ice_connection_state(GstElement *webrtc, GParamSpec *pspec,
 static void whip_dtls_connection_state(GstElement *dtls, GParamSpec *pspec,
 	gpointer user_data G_GNUC_UNUSED);
 static void whip_connect(GstWebRTCSessionDescription *offer);
+static gboolean whip_parse_offer(char *sdp_offer);
 static void whip_disconnect(char *reason);
 
 /* Helper struct to handle libsoup HTTP sessions */
@@ -93,7 +94,7 @@ typedef struct whip_http_session {
 	guint redirects;
 } whip_http_session;
 /* Helper method to send HTTP messages */
-guint whip_http_send(whip_http_session *session, char *method,
+static guint whip_http_send(whip_http_session *session, char *method,
 	char *url, char *payload, char *content_type);
 
 
@@ -194,6 +195,7 @@ int main(int argc, char *argv[]) {
 	g_free(resource_url);
 	g_free(ice_ufrag);
 	g_free(ice_pwd);
+	g_free(first_mid);
 	g_async_queue_unref(candidates);
 
 	WHIP_LOG(LOG_INFO, "\nBye!\n");
@@ -381,6 +383,11 @@ static gboolean whip_send_candidates(gpointer user_data) {
 		"a=ice-ufrag:%s\r\n"
 		"a=ice-pwd:%s\r\n"
 		"m=%s 9 RTP/AVP 0\r\n", ice_ufrag, ice_pwd, audio_pipe ? "audio" : "video");
+	if(first_mid) {
+		g_strlcat(fragment, "a=mid:", sizeof(fragment));
+		g_strlcat(fragment, first_mid, sizeof(fragment));
+		g_strlcat(fragment, "\r\n", sizeof(fragment));
+	}
 	char *candidate = NULL;
 	while((candidate = g_async_queue_try_pop(candidates)) != NULL) {
 		WHIP_LOG(LOG_VERB, WHIP_PREFIX "Sending candidates: %s\n", candidate);
@@ -508,22 +515,10 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Sending SDP offer (%zu bytes)\n", strlen(sdp_offer));
 	WHIP_LOG(LOG_VERB, "%s\n", sdp_offer);
 
-	/* Take note of the ICE ufrag and pwd (we'll need them for trickles) */
-	char *ufrag = strstr(sdp_offer, "a=ice-ufrag:");
-	if(ufrag != NULL) {
-		ufrag += strlen("a=ice-ufrag:");
-		char *end = strstr(ufrag, "\r\n");
-		*end = '\0';
-		ice_ufrag = g_strdup(ufrag);
-		*end = '\r';
-	}
-	char *pwd = strstr(sdp_offer, "a=ice-pwd:");
-	if(pwd != NULL) {
-		pwd += strlen("a=ice-pwd:");
-		char *end = strstr(pwd, "\r\n");
-		*end = '\0';
-		ice_pwd = g_strdup(pwd);
-		*end = '\r';
+	/* Partially parse the SDP to find ICE credentials and the mid for the bundle m-line */
+	if(!whip_parse_offer(sdp_offer)) {
+		whip_disconnect("SDP error");
+		return;
 	}
 
 	/* Create an HTTP connection */
@@ -655,7 +650,7 @@ static void whip_disconnect(char *reason) {
 }
 
 /* Helper method to send HTTP messages */
-guint whip_http_send(whip_http_session *session, char *method,
+static guint whip_http_send(whip_http_session *session, char *method,
 		char *url, char *payload, char *content_type) {
 	if(session == NULL || method == NULL || url == NULL) {
 		WHIP_LOG(LOG_ERR, "Invalid arguments...\n");
@@ -707,4 +702,105 @@ guint whip_http_send(whip_http_session *session, char *method,
 	g_free(session->redirect_url);
 	session->redirect_url = NULL;
 	return status;
+}
+
+/* Helper method to parse SDP offers and extract stuff we need */
+static gboolean whip_parse_offer(char *sdp_offer) {
+	gchar **parts = g_strsplit(sdp_offer, "\n", -1);
+	gboolean mline = FALSE, success = TRUE, done = FALSE;
+	if(parts) {
+		int index = 0;
+		char *line = NULL, *cr = NULL;
+		while(!done && success && (line = parts[index]) != NULL) {
+			cr = strchr(line, '\r');
+			if(cr != NULL)
+				*cr = '\0';
+			if(*line == '\0') {
+				if(cr != NULL)
+					*cr = '\r';
+				index++;
+				continue;
+			}
+			if(strlen(line) < 3) {
+				WHIP_LOG(LOG_ERR, "Invalid line (%zu bytes): %s", strlen(line), line);
+				success = FALSE;
+				break;
+			}
+			if(*(line+1) != '=') {
+				WHIP_LOG(LOG_ERR, "Invalid line (2nd char is not '='): %s", line);
+				success = FALSE;
+				break;
+			}
+			char c = *line;
+			if(!mline) {
+				/* Global stuff */
+				switch(c) {
+					case 'a': {
+						line += 2;
+						char *semicolon = strchr(line, ':');
+						if(semicolon != NULL && *(semicolon+1) != '\0') {
+							*semicolon = '\0';
+							if(!strcasecmp(line, "ice-ufrag")) {
+								g_free(ice_ufrag);
+								ice_ufrag = g_strdup(semicolon+1);
+							} else if(!strcasecmp(line, "ice-pwd")) {
+								g_free(ice_pwd);
+								ice_pwd = g_strdup(semicolon+1);
+							}
+							*semicolon = ':';
+						}
+						break;
+					}
+					case 'm': {
+						/* We found the first m-line, that we'll bundle on */
+						mline = TRUE;
+						break;
+					}
+					default: {
+						/* We ignore everything else, this is not a full parser */
+						break;
+					}
+				}
+			} else {
+				/* m-line stuff */
+				switch(c) {
+					case 'a': {
+						line += 2;
+						char *semicolon = strchr(line, ':');
+						if(semicolon != NULL && *(semicolon+1) != '\0') {
+							*semicolon = '\0';
+							if(!strcasecmp(line, "ice-ufrag")) {
+								g_free(ice_ufrag);
+								ice_ufrag = g_strdup(semicolon+1);
+							} else if(!strcasecmp(line, "ice-pwd")) {
+								g_free(ice_pwd);
+								ice_pwd = g_strdup(semicolon+1);
+							} else if(!strcasecmp(line, "mid")) {
+								g_free(first_mid);
+								first_mid = g_strdup(semicolon+1);
+							}
+							*semicolon = ':';
+						}
+						break;
+					}
+					case 'm': {
+						/* First m-line ended, we're done */
+						done = TRUE;
+						break;
+					}
+					default: {
+						/* We ignore everything else, this is not a full parser */
+						break;
+					}
+				}
+			}
+			if(cr != NULL)
+				*cr = '\r';
+			index++;
+		}
+		if(cr != NULL)
+			*cr = '\r';
+		g_strfreev(parts);
+	}
+	return success;
 }
