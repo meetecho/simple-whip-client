@@ -378,7 +378,7 @@ static gboolean whip_send_candidates(gpointer user_data) {
 	if(candidates == NULL || g_async_queue_length(candidates) == 0)
 		return TRUE;
 	/* Prepare the fragment to send (credentials + fake mline + candidate) */
-	char fragment[1024];
+	char fragment[4096];
 	g_snprintf(fragment, sizeof(fragment),
 		"a=ice-ufrag:%s\r\n"
 		"a=ice-pwd:%s\r\n"
