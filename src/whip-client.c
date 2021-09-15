@@ -399,7 +399,7 @@ static gboolean whip_send_candidates(gpointer user_data) {
 	/* Send the candidate via a PATCH message */
 	whip_http_session session = { 0 };
 	guint status = whip_http_send(&session, "PATCH", resource_url, fragment, "application/trickle-ice-sdpfrag");
-	if(status != 200) {
+	if(status != 200 && status != 204) {
 		/* Couldn't trickle? */
 		WHIP_LOG(LOG_WARN, " [trickle] %u %s\n", status, status ? session.msg->reason_phrase : "HTTP error");
 	}
@@ -557,10 +557,26 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 	} else {
 		/* Relative path */
 		SoupURI *uri = soup_uri_new(server_url);
-		char path[256];
-		g_snprintf(path, sizeof(path), "%s%s",
-			location[0] == '/' ? "" : "/", location);
-		soup_uri_set_path(uri, path);
+		if(location[0] == '/') {
+			/* Use the full returned path as new path */
+			soup_uri_set_path(uri, location);
+		} else {
+			/* Relative url, build the resource url accordingly */
+			const char *endpoint_path = soup_uri_get_path(uri);
+			gchar **parts = g_strsplit(endpoint_path, "/", -1);
+			int i=0;
+			while(parts[i] != NULL) {
+				if(parts[i+1] == NULL) {
+					/* Last part of the path, replace it */
+					g_free(parts[i]);
+					parts[i] = g_strdup(location);
+				}
+				i++;
+			}
+			char *resource_path = g_strjoinv("/", parts);
+			g_strfreev(parts);
+			soup_uri_set_path(uri, resource_path);
+		}
 		resource_url = soup_uri_to_string(uri, FALSE);
 		soup_uri_free(uri);
 	}
