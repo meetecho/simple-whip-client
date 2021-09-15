@@ -557,7 +557,10 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 	} else {
 		/* Relative path */
 		SoupURI *uri = soup_uri_new(server_url);
-		soup_uri_set_path(uri, location);
+		char path[256];
+		g_snprintf(path, sizeof(path), "%s%s",
+			location[0] == '/' ? "" : "/", location);
+		soup_uri_set_path(uri, path);
 		resource_url = soup_uri_to_string(uri, FALSE);
 		soup_uri_free(uri);
 	}
