@@ -51,7 +51,7 @@ enum whip_state {
 static GMainLoop *loop = NULL;
 static GstElement *pipeline = NULL, *pc = NULL;
 static const char *audio_pipe = NULL, *video_pipe = NULL;
-static const char *stun_server = NULL, *turn_server = NULL;
+static const char *stun_server = NULL, **turn_server = NULL;
 
 /* API properties */
 static enum whip_state state = 0;
@@ -118,7 +118,7 @@ static GOptionEntry opt_entries[] = {
 	{ "audio", 'A', 0, G_OPTION_ARG_STRING, &audio_pipe, "GStreamer pipeline to use for audio (optional, required if audio-only)", NULL },
 	{ "video", 'V', 0, G_OPTION_ARG_STRING, &video_pipe, "GStreamer pipeline to use for video (optional, required if video-only)", NULL },
 	{ "stun-server", 'S', 0, G_OPTION_ARG_STRING, &stun_server, "STUN server to use, if any (hostname:port)", NULL },
-	{ "turn-server", 'T', 0, G_OPTION_ARG_STRING, &turn_server, "TURN server to use, if any (username:password@host:port)", NULL },
+	{ "turn-server", 'T', 0, G_OPTION_ARG_STRING_ARRAY, &turn_server, "TURN server to use, if any, can be called multiple times (username:password@host:port)", NULL },
 	{ "log-level", 'l', 0, G_OPTION_ARG_INT, &whip_log_level, "Logging level (0=disable logging, 7=maximum log level; default: 4)", NULL },
 	{ NULL },
 };
@@ -164,7 +164,15 @@ int main(int argc, char *argv[]) {
 	WHIP_LOG(LOG_INFO, "WHIP endpoint:  %s\n", server_url);
 	WHIP_LOG(LOG_INFO, "Bearer Token:   %s\n", token ? token : "(none)");
 	WHIP_LOG(LOG_INFO, "STUN server:    %s\n", stun_server ? stun_server : "(none)");
-	WHIP_LOG(LOG_INFO, "TURN server:    %s\n", turn_server ? turn_server : "(none)");
+	if(turn_server == NULL || turn_server[0] == NULL) {
+		WHIP_LOG(LOG_INFO, "TURN server:    (none)\n");
+	} else {
+		int i=0;
+		while(turn_server[i] != NULL) {
+			WHIP_LOG(LOG_INFO, "TURN server:    %s\n", turn_server[i]);
+			i++;
+		}
+	}
 	WHIP_LOG(LOG_INFO, "Audio pipeline: %s\n", audio_pipe ? audio_pipe : "(none)");
 	WHIP_LOG(LOG_INFO, "Video pipeline: %s\n\n", video_pipe ? video_pipe : "(none)");
 
@@ -248,8 +256,6 @@ static gboolean whip_initialize(void) {
 	turn[0] = '\0';
 	if(stun_server != NULL)
 		g_snprintf(stun, sizeof(stun), "stun-server=stun://%s", stun_server);
-	if(turn_server != NULL)
-		g_snprintf(turn, sizeof(turn), "turn-server=turn://%s", turn_server);
 	audio[0] = '\0';
 	if(audio_pipe != NULL)
 		g_snprintf(audio, sizeof(audio), "%s ! sendonly.", audio_pipe);
@@ -271,6 +277,17 @@ static gboolean whip_initialize(void) {
 	/* Get a pointer to the PeerConnection object */
 	pc = gst_bin_get_by_name(GST_BIN(pipeline), "sendonly");
 	g_assert_nonnull(pc);
+	/* Check if there's any TURN server to add */
+	if(turn_server != NULL && turn_server[0] != NULL) {
+		int i=0;
+		gboolean ret = FALSE;
+		while(turn_server[i] != NULL) {
+			g_signal_emit_by_name(pc, "add-turn-server", turn_server[i], &ret);
+			if(!ret)
+				WHIP_LOG(LOG_WARN, "Error adding TURN server (%s)\n", turn_server[i]);
+			i++;
+		}
+	}
 	/* Let's configure the function to be invoked when an SDP offer can be prepared */
 	g_signal_connect(pc, "on-negotiation-needed", G_CALLBACK(whip_negotiation_needed), NULL);
 	/* We need a different callback to be notified about candidates to trickle to Janus */

@@ -36,7 +36,7 @@ Application Options:
   -A, --audio           GStreamer pipeline to use for audio (optional, required if audio-only)
   -V, --video           GStreamer pipeline to use for video (optional, required if video-only)
   -S, --stun-server     STUN server to use, if any (hostname:port)
-  -T, --turn-server     TURN server to use, if any (username:password@host:port)
+  -T, --turn-server     TURN server to use, if any, can be called multiple times (username:password@host:port)
   -l, --log-level       Logging level (0=disable logging, 7=maximum log level; default: 4)
 ```
 
