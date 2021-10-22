@@ -35,8 +35,8 @@ Application Options:
   -t, --token           Authentication Bearer token to use (optional)
   -A, --audio           GStreamer pipeline to use for audio (optional, required if audio-only)
   -V, --video           GStreamer pipeline to use for video (optional, required if video-only)
-  -S, --stun-server     STUN server to use, if any (hostname:port)
-  -T, --turn-server     TURN server to use, if any (username:password@host:port)
+  -S, --stun-server     STUN server to use, if any (stun://hostname:port)
+  -T, --turn-server     TURN server to use, if any; can be called multiple times (turn(s)://username:password@host:port?transport=[udp,tcp])
   -l, --log-level       Logging level (0=disable logging, 7=maximum log level; default: 4)
 ```
 
@@ -66,7 +66,7 @@ In case, e.g., STUN is needed too, the above command can be extended like this:
 	-t verysecret \
 	-A "audiotestsrc is-live=true wave=red-noise ! audioconvert ! audioresample ! queue ! opusenc ! rtpopuspay pt=100 ssrc=1 ! queue ! application/x-rtp,media=audio,encoding-name=OPUS,payload=100" \
 	-V "videotestsrc is-live=true pattern=ball ! videoconvert ! queue ! vp8enc deadline=1 ! rtpvp8pay pt=96 ssrc=2 ! queue ! application/x-rtp,media=video,encoding-name=VP8,payload=96" \
-	-S stun.l.google.com:19302
+	-S stun://stun.l.google.com:19302
 ```
 
 You can stop the client via CTRL+C, which will automatically send an HTTP DELETE to the WHIP resource to tear down the session.
