@@ -117,8 +117,8 @@ static GOptionEntry opt_entries[] = {
 	{ "token", 't', 0, G_OPTION_ARG_STRING, &token, "Authentication Bearer token to use (optional)", NULL },
 	{ "audio", 'A', 0, G_OPTION_ARG_STRING, &audio_pipe, "GStreamer pipeline to use for audio (optional, required if audio-only)", NULL },
 	{ "video", 'V', 0, G_OPTION_ARG_STRING, &video_pipe, "GStreamer pipeline to use for video (optional, required if video-only)", NULL },
-	{ "stun-server", 'S', 0, G_OPTION_ARG_STRING, &stun_server, "STUN server to use, if any (hostname:port)", NULL },
-	{ "turn-server", 'T', 0, G_OPTION_ARG_STRING_ARRAY, &turn_server, "TURN server to use, if any, can be called multiple times (username:password@host:port)", NULL },
+	{ "stun-server", 'S', 0, G_OPTION_ARG_STRING, &stun_server, "STUN server to use, if any (stun://hostname:port)", NULL },
+	{ "turn-server", 'T', 0, G_OPTION_ARG_STRING_ARRAY, &turn_server, "TURN server to use, if any; can be called multiple times (turn(s)://username:password@host:port?transport=[udp,tcp])", NULL },
 	{ "log-level", 'l', 0, G_OPTION_ARG_INT, &whip_log_level, "Logging level (0=disable logging, 7=maximum log level; default: 4)", NULL },
 	{ NULL },
 };
@@ -163,13 +163,23 @@ int main(int argc, char *argv[]) {
 
 	WHIP_LOG(LOG_INFO, "WHIP endpoint:  %s\n", server_url);
 	WHIP_LOG(LOG_INFO, "Bearer Token:   %s\n", token ? token : "(none)");
-	WHIP_LOG(LOG_INFO, "STUN server:    %s\n", stun_server ? stun_server : "(none)");
+	if(stun_server && strstr(stun_server, "stun://") != stun_server) {
+		WHIP_LOG(LOG_WARN, "Invalid STUN address (should be stun://hostname:port)\n");
+		stun_server = NULL;
+	} else {
+		WHIP_LOG(LOG_INFO, "STUN server:    %s\n", stun_server ? stun_server : "(none)");
+	}
 	if(turn_server == NULL || turn_server[0] == NULL) {
 		WHIP_LOG(LOG_INFO, "TURN server:    (none)\n");
 	} else {
 		int i=0;
 		while(turn_server[i] != NULL) {
-			WHIP_LOG(LOG_INFO, "TURN server:    %s\n", turn_server[i]);
+			if(strstr(turn_server[i], "turn://") != turn_server[i] &&
+					strstr(turn_server[i], "turns://") != turn_server[i]) {
+				WHIP_LOG(LOG_WARN, "Invalid TURN address (should be turn(s)://username:password@host:port?transport=[udp,tcp]\n");
+			} else {
+				WHIP_LOG(LOG_INFO, "TURN server:    %s\n", turn_server[i]);
+			}
 			i++;
 		}
 	}
@@ -255,7 +265,7 @@ static gboolean whip_initialize(void) {
 	stun[0] = '\0';
 	turn[0] = '\0';
 	if(stun_server != NULL)
-		g_snprintf(stun, sizeof(stun), "stun-server=stun://%s", stun_server);
+		g_snprintf(stun, sizeof(stun), "stun-server=%s", stun_server);
 	audio[0] = '\0';
 	if(audio_pipe != NULL)
 		g_snprintf(audio, sizeof(audio), "%s ! sendonly.", audio_pipe);
@@ -282,9 +292,14 @@ static gboolean whip_initialize(void) {
 		int i=0;
 		gboolean ret = FALSE;
 		while(turn_server[i] != NULL) {
-			g_signal_emit_by_name(pc, "add-turn-server", turn_server[i], &ret);
-			if(!ret)
-				WHIP_LOG(LOG_WARN, "Error adding TURN server (%s)\n", turn_server[i]);
+			if(strstr(turn_server[i], "turn://") != turn_server[i] &&
+					strstr(turn_server[i], "turns://") != turn_server[i]) {
+				/* Invalid TURN server, skip */
+			} else {
+				g_signal_emit_by_name(pc, "add-turn-server", turn_server[i], &ret);
+				if(!ret)
+					WHIP_LOG(LOG_WARN, "Error adding TURN server (%s)\n", turn_server[i]);
+			}
 			i++;
 		}
 	}
