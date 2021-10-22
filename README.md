@@ -70,3 +70,14 @@ In case, e.g., STUN is needed too, the above command can be extended like this:
 ```
 
 You can stop the client via CTRL+C, which will automatically send an HTTP DELETE to the WHIP resource to tear down the session.
+
+# Docker
+
+With docker installed you can build the image and run it for yourself
+
+```
+docker build -t simple-whip-client .
+docker run -it --rm -e "URL=http://foo.com/whip/bar" simple-whip-client
+```
+
+Right now the parameters of the command are hard coded other than URL which you can pass in via an env variable
