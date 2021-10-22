@@ -4,21 +4,9 @@ RUN apt-get update --allow-releaseinfo-change && \
     apt-get install -y --no-install-recommends \
         git \
         build-essential \
-        autoconf \
-        automake \
-        autotools-dev \
-        dh-make \
-        debhelper \
         devscripts \
-        fakeroot \
-        xutils \
         pkg-config \
-        libtool \
-        automake \
-        cmake \
         sudo \
-        g++ \
-        gcc \
         libc6-dev \
         gstreamer1.0-tools \
         gstreamer1.0-nice \
@@ -44,4 +32,4 @@ WORKDIR /opt/simple-whip-client
 
 ENV URL=http://localhost:3000/whip/foo
 
-ENTRYPOINT ./whip-client -u $URL -A "audiotestsrc is-live=true wave=red-noise ! audioconvert ! audioresample ! queue ! opusenc ! rtpopuspay pt=100 ssrc=1 ! queue ! application/x-rtp,media=audio,encoding-name=OPUS,payload=100" -V "videotestsrc is-live=true pattern=ball ! videoconvert ! queue ! vp8enc deadline=1 ! rtpvp8pay pt=96 ssrc=2 ! queue ! application/x-rtp,media=video,encoding-name=VP8,payload=96" -S stun.l.google.com:19302
+ENTRYPOINT ./whip-client -u $URL -A "audiotestsrc is-live=true wave=red-noise ! audioconvert ! audioresample ! queue ! opusenc ! rtpopuspay pt=100 ssrc=1 ! queue ! application/x-rtp,media=audio,encoding-name=OPUS,payload=100" -V "videotestsrc is-live=true pattern=ball ! videoconvert ! queue ! vp8enc deadline=1 ! rtpvp8pay pt=96 ssrc=2 ! queue ! application/x-rtp,media=video,encoding-name=VP8,payload=96" -S stun://stun.l.google.com:19302
