@@ -51,6 +51,7 @@ enum whip_state {
 static GMainLoop *loop = NULL;
 static GstElement *pipeline = NULL, *pc = NULL;
 static const char *audio_pipe = NULL, *video_pipe = NULL;
+static gboolean follow_link = FALSE;
 static const char *stun_server = NULL, **turn_server = NULL;
 
 /* API properties */
@@ -79,6 +80,7 @@ static void whip_ice_connection_state(GstElement *webrtc, GParamSpec *pspec,
 static void whip_dtls_connection_state(GstElement *dtls, GParamSpec *pspec,
 	gpointer user_data G_GNUC_UNUSED);
 static void whip_connect(GstWebRTCSessionDescription *offer);
+static void whip_process_link_header(char *link);
 static gboolean whip_parse_offer(char *sdp_offer);
 static void whip_disconnect(char *reason);
 
@@ -117,6 +119,7 @@ static GOptionEntry opt_entries[] = {
 	{ "token", 't', 0, G_OPTION_ARG_STRING, &token, "Authentication Bearer token to use (optional)", NULL },
 	{ "audio", 'A', 0, G_OPTION_ARG_STRING, &audio_pipe, "GStreamer pipeline to use for audio (optional, required if audio-only)", NULL },
 	{ "video", 'V', 0, G_OPTION_ARG_STRING, &video_pipe, "GStreamer pipeline to use for video (optional, required if video-only)", NULL },
+	{ "follow-link", 'f', 0, G_OPTION_ARG_NONE, &follow_link, "Use the Link headers returned by the WHIP server to automatically configure STUN/TURN servers to use (default: false)", NULL },
 	{ "stun-server", 'S', 0, G_OPTION_ARG_STRING, &stun_server, "STUN server to use, if any (stun://hostname:port)", NULL },
 	{ "turn-server", 'T', 0, G_OPTION_ARG_STRING_ARRAY, &turn_server, "TURN server to use, if any; can be called multiple times (turn(s)://username:password@host:port?transport=[udp,tcp])", NULL },
 	{ "log-level", 'l', 0, G_OPTION_ARG_INT, &whip_log_level, "Logging level (0=disable logging, 7=maximum log level; default: 4)", NULL },
@@ -163,24 +166,27 @@ int main(int argc, char *argv[]) {
 
 	WHIP_LOG(LOG_INFO, "WHIP endpoint:  %s\n", server_url);
 	WHIP_LOG(LOG_INFO, "Bearer Token:   %s\n", token ? token : "(none)");
-	if(stun_server && strstr(stun_server, "stun://") != stun_server) {
-		WHIP_LOG(LOG_WARN, "Invalid STUN address (should be stun://hostname:port)\n");
-		stun_server = NULL;
-	} else {
-		WHIP_LOG(LOG_INFO, "STUN server:    %s\n", stun_server ? stun_server : "(none)");
-	}
-	if(turn_server == NULL || turn_server[0] == NULL) {
-		WHIP_LOG(LOG_INFO, "TURN server:    (none)\n");
-	} else {
-		int i=0;
-		while(turn_server[i] != NULL) {
-			if(strstr(turn_server[i], "turn://") != turn_server[i] &&
-					strstr(turn_server[i], "turns://") != turn_server[i]) {
-				WHIP_LOG(LOG_WARN, "Invalid TURN address (should be turn(s)://username:password@host:port?transport=[udp,tcp]\n");
-			} else {
-				WHIP_LOG(LOG_INFO, "TURN server:    %s\n", turn_server[i]);
+	WHIP_LOG(LOG_INFO, "Auto STUN/TURN: %s\n", follow_link ? "yes (via Link headers)" : "no");
+	if(!follow_link || stun_server || turn_server) {
+		if(stun_server && strstr(stun_server, "stun://") != stun_server) {
+			WHIP_LOG(LOG_WARN, "Invalid STUN address (should be stun://hostname:port)\n");
+			stun_server = NULL;
+		} else {
+			WHIP_LOG(LOG_INFO, "STUN server:    %s\n", stun_server ? stun_server : "(none)");
+		}
+		if(turn_server == NULL || turn_server[0] == NULL) {
+			WHIP_LOG(LOG_INFO, "TURN server:    (none)\n");
+		} else {
+			int i=0;
+			while(turn_server[i] != NULL) {
+				if(strstr(turn_server[i], "turn://") != turn_server[i] &&
+						strstr(turn_server[i], "turns://") != turn_server[i]) {
+					WHIP_LOG(LOG_WARN, "Invalid TURN address (should be turn(s)://username:password@host:port?transport=[udp,tcp]\n");
+				} else {
+					WHIP_LOG(LOG_INFO, "TURN server:    %s\n", turn_server[i]);
+				}
+				i++;
 			}
-			i++;
 		}
 	}
 	WHIP_LOG(LOG_INFO, "Audio pipeline: %s\n", audio_pipe ? audio_pipe : "(none)");
@@ -613,6 +619,19 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 		soup_uri_free(uri);
 	}
 	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Resource URL: %s\n", resource_url);
+	/* If we have to, check if there's Link headers with STUN/TURN servers we can use */
+	if(follow_link) {
+		WHIP_LOG(LOG_INFO, WHIP_PREFIX "Auto configuration of STUN/TURN servers:\n");
+		const char *link = soup_message_headers_get_list(session.msg->response_headers, "link");
+		int i = 0;
+		gchar **links = g_strsplit(link, ", ", -1);
+		while(links[i] != NULL) {
+			whip_process_link_header(links[i]);
+			i++;
+		}
+		g_clear_pointer(&links, g_strfreev);
+		gst_element_sync_state_with_parent(pc);
+	}
 	/* Now that we know the resource url, prepare the timer to send trickle candidates:
 	 * since most candidates will be local, rather than sending an HTTP PATCH message as
 	 * soon as we're aware of it, we queue it, and we send a (grouped) message every ~100ms */
@@ -854,4 +873,27 @@ static gboolean whip_parse_offer(char *sdp_offer) {
 		g_strfreev(parts);
 	}
 	return success;
+}
+
+/* Helper method to parse a Link header, and in case set the STUN/TURN server */
+static void whip_process_link_header(char *link) {
+	if(link == NULL)
+		return;
+	WHIP_LOG(LOG_INFO, WHIP_PREFIX "  -- %s\n", link);
+	if(strstr(link, "rel=\"ice-server\"") == NULL) {
+		WHIP_LOG(LOG_WARN, "Missing 'rel=\"ice-server\"' attribute, skipping...\n");
+		return;
+	}
+	if(strstr(link, "stun:") == link) {
+		/* STUN server */
+		gchar **parts = g_strsplit(link, "; ", -1);
+		g_object_set(pc, "stun-server", parts[0], NULL);
+		g_clear_pointer(&parts, g_strfreev);
+		return;
+	} else if(strstr(link, "turn:") == link || strstr(link, "turn:") == link) {
+		WHIP_LOG(LOG_WARN, "TURN parsing from Link headers currently unsupported, skipping...\n");
+		return;
+	}
+	WHIP_LOG(LOG_WARN, "Unsupported protocol, skipping...\n");
+	return;
 }
