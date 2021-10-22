@@ -73,11 +73,11 @@ You can stop the client via CTRL+C, which will automatically send an HTTP DELETE
 
 # Docker
 
-With docker installed you can build the image and run it for yourself
+With docker installed, you can build the image automatically and run it for yourself:
 
 ```
 docker build -t simple-whip-client .
 docker run -it --rm -e "URL=http://foo.com/whip/bar" simple-whip-client
 ```
 
-Right now the parameters of the command are hard coded other than URL which you can pass in via an env variable
+At the moment, the parameters of the command (e.g., the audio and video pipelines) are hardcoded, other than URL which you can pass in via an env variable.
