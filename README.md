@@ -1,7 +1,7 @@
 Simple WHIP Client
 ==================
 
-This is an attempt to create a simple prototype of a [WHIP client](https://www.ietf.org/archive/id/draft-ietf-wish-whip-00.html), to be used mostly for testing with my [Simple WHIP Server](https://github.com/lminiero/simple-whip-server) (based on [Janus](https://github.com/meetecho/janus-gateway/)), as well as interoperability testing with other WHIP implementations. As such, it's very early stages, and mostly meant as a playground for interested developers.
+This is an attempt to create a simple prototype of a [WHIP client](https://www.ietf.org/archive/id/draft-ietf-wish-whip-01.html), to be used mostly for testing with my [Simple WHIP Server](https://github.com/lminiero/simple-whip-server) (based on [Janus](https://github.com/meetecho/janus-gateway/)), as well as interoperability testing with other WHIP implementations. As such, it's very early stages, and mostly meant as a playground for interested developers.
 
 # Building the WHIP client
 
