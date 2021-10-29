@@ -35,6 +35,7 @@ Application Options:
   -t, --token           Authentication Bearer token to use (optional)
   -A, --audio           GStreamer pipeline to use for audio (optional, required if audio-only)
   -V, --video           GStreamer pipeline to use for video (optional, required if video-only)
+  -f, --follow-link     Use the Link headers returned by the WHIP server to automatically configure STUN/TURN servers to use (default: false)
   -S, --stun-server     STUN server to use, if any (stun://hostname:port)
   -T, --turn-server     TURN server to use, if any; can be called multiple times (turn(s)://username:password@host:port?transport=[udp,tcp])
   -l, --log-level       Logging level (0=disable logging, 7=maximum log level; default: 4)
