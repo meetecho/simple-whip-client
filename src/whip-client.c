@@ -930,10 +930,9 @@ static void whip_process_link_header(char *link) {
 	} else if(strstr(link, "turn:") == link || strstr(link, "turns:") == link) {
 		/* TURN server */
 		gboolean turns = (strstr(link, "turns:") == link);
-		char address[1024], host[256], username[256], credential[256];
+		char address[1024], host[256];
+		char *username = NULL, *credential = NULL;
 		host[0] = '\0';
-		username[0] = '\0';
-		credential[0] = '\0';
 		GHashTable *list = soup_header_parse_semi_param_list(link);
 		GHashTableIter iter;
 		gpointer key, value;
@@ -952,17 +951,22 @@ static void whip_process_link_header(char *link) {
 				}
 			} else if(!strcasecmp((char *)key, "username")) {
 				/* Username */
-				if(value != NULL)
-					g_snprintf(username, sizeof(username), "%s", (char *)value);
+				if(value != NULL) {
+					/* We need to escape this, as it will be part of the TURN uri */
+					g_free(username);
+					username = g_uri_escape_string((char *)value, NULL, FALSE);
+				}
 			} else if(!strcasecmp((char *)key, "credential")) {
 				/* Credential */
-				if(value != NULL)
-					g_snprintf(credential, sizeof(credential), "%s", (char *)value);
+				if(value != NULL) {
+					/* We need to escape this, as it will be part of the TURN uri */
+					g_free(credential);
+					credential = g_uri_escape_string((char *)value, NULL, FALSE);
+				}
 			}
 		}
 		soup_header_free_param_list(list);
 		if(strlen(username) > 0 && strlen(credential) > 0) {
-			/* FIXME We should escape these, since we're making them part of the uri */
 			g_snprintf(address, sizeof(address), "%s://%s:%s@%s",
 				turns ? "turns" : "turn", username, credential, host);
 		} else {
