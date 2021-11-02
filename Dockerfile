@@ -1,7 +1,8 @@
-FROM debian:bullseye AS builder
+FROM debian:sid AS builder
 
 RUN apt-get update --allow-releaseinfo-change && \
     apt-get install -y --no-install-recommends \
+        gdb \
         git \
         build-essential \
         devscripts \
