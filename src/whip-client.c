@@ -227,6 +227,13 @@ int main(int argc, char *argv[]) {
 	g_free(first_mid);
 	g_async_queue_unref(candidates);
 	g_free(auto_stun_server);
+	if(auto_turn_server != NULL) {
+		int count = 0;
+		while(auto_turn_server[count] != NULL) {
+			g_free(auto_turn_server[count]);
+			count++;
+		}
+	}
 	g_free(auto_turn_server);
 
 	WHIP_LOG(LOG_INFO, "\nBye!\n");
@@ -600,6 +607,7 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 	/* Create an HTTP connection */
 	whip_http_session session = { 0 };
 	guint status = whip_http_send(&session, "POST", (char *)server_url, sdp_offer, "application/sdp");
+	g_free(sdp_offer);
 	if(status != 201) {
 		/* Didn't get the success we were expecting */
 		WHIP_LOG(LOG_ERR, " [%u] %s\n", status, status ? session.msg->reason_phrase : "HTTP error");
@@ -707,17 +715,20 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 	g_object_unref(session.http_conn);
 	if(ret != GST_SDP_OK) {
 		/* Something went wrong */
+		gst_sdp_message_free(sdp);
 		WHIP_LOG(LOG_ERR, "Error parsing SDP buffer (%d)\n", ret);
 		whip_disconnect("SDP error");
 		return;
 	}
 	GstWebRTCSessionDescription *gst_sdp = gst_webrtc_session_description_new(GST_WEBRTC_SDP_TYPE_ANSWER, sdp);
+
 	/* Set remote description on our pipeline */
 	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Setting remote description\n");
 	GstPromise *promise = gst_promise_new();
 	g_signal_emit_by_name(pc, "set-remote-description", gst_sdp, promise);
 	gst_promise_interrupt(promise);
 	gst_promise_unref(promise);
+	gst_webrtc_session_description_free(gst_sdp);
 }
 
 /* Helper method to disconnect from the WHIP endpoint */
@@ -974,6 +985,8 @@ static void whip_process_link_header(char *link) {
 				turns ? "turns" : "turn", host);
 		}
 		WHIP_LOG(LOG_INFO, WHIP_PREFIX "  -- -- %s\n", address);
+		g_free(username);
+		g_free(credential);
 		/* Add to the list of TURN servers */
 		if(auto_turn_server == NULL) {
 			auto_turn_server = g_malloc0(2*sizeof(gpointer));
