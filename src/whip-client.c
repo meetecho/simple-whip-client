@@ -51,7 +51,7 @@ enum whip_state {
 static GMainLoop *loop = NULL;
 static GstElement *pipeline = NULL, *pc = NULL;
 static const char *audio_pipe = NULL, *video_pipe = NULL;
-static gboolean follow_link = FALSE;
+static gboolean follow_link = FALSE, force_turn = FALSE;
 static const char *stun_server = NULL, **turn_server = NULL;
 static char *auto_stun_server = NULL, **auto_turn_server = NULL;
 
@@ -124,6 +124,7 @@ static GOptionEntry opt_entries[] = {
 	{ "follow-link", 'f', 0, G_OPTION_ARG_NONE, &follow_link, "Use the Link headers returned by the WHIP server to automatically configure STUN/TURN servers to use (default: false)", NULL },
 	{ "stun-server", 'S', 0, G_OPTION_ARG_STRING, &stun_server, "STUN server to use, if any (stun://hostname:port)", NULL },
 	{ "turn-server", 'T', 0, G_OPTION_ARG_STRING_ARRAY, &turn_server, "TURN server to use, if any; can be called multiple times (turn(s)://username:password@host:port?transport=[udp,tcp])", NULL },
+	{ "force-turn", 'F', 0, G_OPTION_ARG_NONE, &force_turn, "In case TURN servers are provided, force using a relay (default: false)", NULL },
 	{ "log-level", 'l', 0, G_OPTION_ARG_INT, &whip_log_level, "Logging level (0=disable logging, 7=maximum log level; default: 4)", NULL },
 	{ NULL },
 };
@@ -189,6 +190,14 @@ int main(int argc, char *argv[]) {
 				}
 				i++;
 			}
+		}
+	}
+	if(force_turn) {
+		if(!follow_link && !turn_server) {
+			WHIP_LOG(LOG_WARN, "Can't force TURN, no TURN servers provided\n");
+			force_turn = FALSE;
+		} else {
+			WHIP_LOG(LOG_INFO, "Forcing TURN:   true\n");
 		}
 	}
 	WHIP_LOG(LOG_INFO, "Audio pipeline: %s\n", audio_pipe ? audio_pipe : "(none)");
@@ -323,8 +332,10 @@ static gboolean whip_initialize(void) {
 	video[0] = '\0';
 	if(video_pipe != NULL)
 		g_snprintf(video, sizeof(video), "%s ! sendonly.", video_pipe);
-	g_snprintf(gst_pipeline, sizeof(gst_pipeline), "webrtcbin name=sendonly bundle-policy=%d %s %s %s %s",
-		(audio_pipe && video_pipe ? 3 : 0), stun, turn, video, audio);
+	g_snprintf(gst_pipeline, sizeof(gst_pipeline), "webrtcbin name=sendonly bundle-policy=%d %s %s %s %s %s",
+		(audio_pipe && video_pipe ? 3 : 0),
+		(force_turn ? "ice-transport-policy=relay" : ""),
+		stun, turn, video, audio);
 	/* Launch the pipeline */
 	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Initializing the GStreamer pipeline:\n%s\n", gst_pipeline);
 	GError *error = NULL;

@@ -38,6 +38,7 @@ Application Options:
   -f, --follow-link     Use the Link headers returned by the WHIP server to automatically configure STUN/TURN servers to use (default: false)
   -S, --stun-server     STUN server to use, if any (stun://hostname:port)
   -T, --turn-server     TURN server to use, if any; can be called multiple times (turn(s)://username:password@host:port?transport=[udp,tcp])
+  -F, --force-turn      In case TURN servers are provided, force using a relay (default: false)
   -l, --log-level       Logging level (0=disable logging, 7=maximum log level; default: 4)
 ```
 
