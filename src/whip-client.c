@@ -491,6 +491,10 @@ static gboolean whip_send_candidates(gpointer user_data) {
 		g_free(candidate);
 	}
 	/* Send the candidate via a PATCH message */
+	if(resource_url == NULL) {
+		WHIP_LOG(LOG_WARN, "No resource url, can't trickle...\n");
+		return TRUE;
+	}
 	whip_http_session session = { 0 };
 	guint status = whip_http_send(&session, "PATCH", resource_url, fragment, "application/trickle-ice-sdpfrag");
 	if(status != 200 && status != 204) {
@@ -646,36 +650,40 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 	}
 	/* Parse the location header to populate the resource url */
 	const char *location = soup_message_headers_get_one(session.msg->response_headers, "location");
-	if(strstr(location, "http")) {
-		/* Easy enough */
-		resource_url = g_strdup(location);
+	if(location == NULL) {
+		WHIP_LOG(LOG_WARN, "No Location header, won't be able to trickle or teardown the session\n");
 	} else {
-		/* Relative path */
-		SoupURI *uri = soup_uri_new(server_url);
-		if(location[0] == '/') {
-			/* Use the full returned path as new path */
-			soup_uri_set_path(uri, location);
+		if(strstr(location, "http")) {
+			/* Easy enough */
+			resource_url = g_strdup(location);
 		} else {
-			/* Relative url, build the resource url accordingly */
-			const char *endpoint_path = soup_uri_get_path(uri);
-			gchar **parts = g_strsplit(endpoint_path, "/", -1);
-			int i=0;
-			while(parts[i] != NULL) {
-				if(parts[i+1] == NULL) {
-					/* Last part of the path, replace it */
-					g_free(parts[i]);
-					parts[i] = g_strdup(location);
+			/* Relative path */
+			SoupURI *uri = soup_uri_new(server_url);
+			if(location[0] == '/') {
+				/* Use the full returned path as new path */
+				soup_uri_set_path(uri, location);
+			} else {
+				/* Relative url, build the resource url accordingly */
+				const char *endpoint_path = soup_uri_get_path(uri);
+				gchar **parts = g_strsplit(endpoint_path, "/", -1);
+				int i=0;
+				while(parts[i] != NULL) {
+					if(parts[i+1] == NULL) {
+						/* Last part of the path, replace it */
+						g_free(parts[i]);
+						parts[i] = g_strdup(location);
+					}
+					i++;
 				}
-				i++;
+				char *resource_path = g_strjoinv("/", parts);
+				g_strfreev(parts);
+				soup_uri_set_path(uri, resource_path);
 			}
-			char *resource_path = g_strjoinv("/", parts);
-			g_strfreev(parts);
-			soup_uri_set_path(uri, resource_path);
+			resource_url = soup_uri_to_string(uri, FALSE);
+			soup_uri_free(uri);
 		}
-		resource_url = soup_uri_to_string(uri, FALSE);
-		soup_uri_free(uri);
+		WHIP_LOG(LOG_INFO, WHIP_PREFIX "Resource URL: %s\n", resource_url);
 	}
-	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Resource URL: %s\n", resource_url);
 	/* Now that we know the resource url, prepare the timer to send trickle candidates:
 	 * since most candidates will be local, rather than sending an HTTP PATCH message as
 	 * soon as we're aware of it, we queue it, and we send a (grouped) message every ~100ms */
