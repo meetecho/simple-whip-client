@@ -51,7 +51,8 @@ enum whip_state {
 static GMainLoop *loop = NULL;
 static GstElement *pipeline = NULL, *pc = NULL;
 static const char *audio_pipe = NULL, *video_pipe = NULL;
-static gboolean follow_link = FALSE, force_turn = FALSE;
+static gboolean no_trickle = FALSE, gathering_done = FALSE,
+	follow_link = FALSE, force_turn = FALSE;
 static const char *stun_server = NULL, **turn_server = NULL;
 static char *auto_stun_server = NULL, **auto_turn_server = NULL;
 
@@ -121,6 +122,7 @@ static GOptionEntry opt_entries[] = {
 	{ "token", 't', 0, G_OPTION_ARG_STRING, &token, "Authentication Bearer token to use (optional)", NULL },
 	{ "audio", 'A', 0, G_OPTION_ARG_STRING, &audio_pipe, "GStreamer pipeline to use for audio (optional, required if audio-only)", NULL },
 	{ "video", 'V', 0, G_OPTION_ARG_STRING, &video_pipe, "GStreamer pipeline to use for video (optional, required if video-only)", NULL },
+	{ "no-trickle", 'n', 0, G_OPTION_ARG_NONE, &no_trickle, "Don't trickle candidates, but put them in the SDP offer (default: false)", NULL },
 	{ "follow-link", 'f', 0, G_OPTION_ARG_NONE, &follow_link, "Use the Link headers returned by the WHIP server to automatically configure STUN/TURN servers to use (default: false)", NULL },
 	{ "stun-server", 'S', 0, G_OPTION_ARG_STRING, &stun_server, "STUN server to use, if any (stun://hostname:port)", NULL },
 	{ "turn-server", 'T', 0, G_OPTION_ARG_STRING_ARRAY, &turn_server, "TURN server to use, if any; can be called multiple times (turn(s)://username:password@host:port?transport=[udp,tcp])", NULL },
@@ -169,6 +171,7 @@ int main(int argc, char *argv[]) {
 
 	WHIP_LOG(LOG_INFO, "WHIP endpoint:  %s\n", server_url);
 	WHIP_LOG(LOG_INFO, "Bearer Token:   %s\n", token ? token : "(none)");
+	WHIP_LOG(LOG_INFO, "Trickle ICE:    %s\n", no_trickle ? "no (candidates in SDP offer)" : "yes (HTTP PATCH)");
 	WHIP_LOG(LOG_INFO, "Auto STUN/TURN: %s\n", follow_link ? "yes (via Link headers)" : "no");
 	if(!follow_link || stun_server || turn_server) {
 		if(stun_server && strstr(stun_server, "stun://") != stun_server) {
@@ -414,13 +417,13 @@ static void whip_negotiation_needed(GstElement *element, gpointer user_data) {
 }
 
 /* Callback invoked when we have an SDP offer ready to be sent */
+static GstWebRTCSessionDescription *offer = NULL;
 static void whip_offer_available(GstPromise *promise, gpointer user_data) {
 	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Offer created\n");
 	/* Make sure we're in the right state */
 	g_assert_cmphex(state, ==, WHIP_STATE_OFFER_PREPARED);
 	g_assert_cmphex(gst_promise_wait(promise), ==, GST_PROMISE_RESULT_REPLIED);
 	const GstStructure *reply = gst_promise_get_reply(promise);
-	GstWebRTCSessionDescription *offer = NULL;
 	gst_structure_get(reply, "offer", GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &offer, NULL);
 	gst_promise_unref(promise);
 
@@ -435,9 +438,14 @@ static void whip_offer_available(GstPromise *promise, gpointer user_data) {
 	GstElement *dtls = gst_bin_get_by_name(GST_BIN(pc), "dtlsdec0");
 	g_signal_connect(dtls, "notify::connection-state", G_CALLBACK(whip_dtls_connection_state), NULL);
 
-	/* Now that the offer is ready, connect to the WHIP endpoint and send it there */
-	whip_connect(offer);
-	gst_webrtc_session_description_free(offer);
+	/* Now that the offer is ready, connect to the WHIP endpoint and send it there
+	 * (unless we're not tricking, in which case we wait for gathering to be
+	 * completed, and then add all candidates to this offer before sending it) */
+	if(!no_trickle || gathering_done) {
+		whip_connect(offer);
+		gst_webrtc_session_description_free(offer);
+		offer = NULL;
+	}
 }
 
 /* Callback invoked when a candidate to trickle becomes available */
@@ -547,6 +555,13 @@ static void whip_ice_gathering_state(GstElement *webrtc, GParamSpec *pspec,
 			WHIP_LOG(LOG_INFO, WHIP_PREFIX "ICE gathering completed\n");
 			/* Send an a=end-of-candidates trickle */
 			g_async_queue_push(candidates, g_strdup("end-of-candidates"));
+			gathering_done = TRUE;
+			/* If we're not trickling, send the SDP with all candidates now */
+			if(no_trickle) {
+				whip_connect(offer);
+				gst_webrtc_session_description_free(offer);
+				offer = NULL;
+			}
 			break;
 		default:
 			break;
@@ -611,6 +626,44 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 	/* Convert the SDP object to a string */
 	char *sdp_offer = gst_sdp_message_as_text(offer->sdp);
 	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Sending SDP offer (%zu bytes)\n", strlen(sdp_offer));
+
+	/* If we're not trickling, add our candidates to the SDP */
+	if(no_trickle) {
+		/* Prepare the candidate attributes */
+		char attributes[4096], expanded_sdp[8192];
+		attributes[0] = '\0';
+		expanded_sdp[0] = '\0';
+		char *candidate = NULL;
+		while((candidate = g_async_queue_try_pop(candidates)) != NULL) {
+			WHIP_LOG(LOG_VERB, WHIP_PREFIX "Adding candidate to SDP: %s\n", candidate);
+			g_strlcat(attributes, "a=", sizeof(attributes));
+			g_strlcat(attributes, candidate, sizeof(attributes));
+			g_strlcat(attributes, "\r\n", sizeof(attributes));
+			g_free(candidate);
+		}
+		/* Add them to all m-lines */
+		int mlines = 0, i = 0;
+		gchar **lines = g_strsplit(sdp_offer, "\r\n", -1);
+		gchar *line = NULL;
+		while(lines[i] != NULL) {
+			line = lines[i];
+			if(strstr(line, "m=") == line) {
+				/* New m-line */
+				mlines++;
+				if(mlines > 1)
+					g_strlcat(expanded_sdp, attributes, sizeof(expanded_sdp));
+			}
+			if(strlen(line) > 2) {
+				g_strlcat(expanded_sdp, line, sizeof(expanded_sdp));
+				g_strlcat(expanded_sdp, "\r\n", sizeof(expanded_sdp));
+			}
+			i++;
+		}
+		g_clear_pointer(&lines, g_strfreev);
+		g_strlcat(expanded_sdp, attributes, sizeof(expanded_sdp));
+		g_free(sdp_offer);
+		sdp_offer = g_strdup(expanded_sdp);
+	}
 	WHIP_LOG(LOG_VERB, "%s\n", sdp_offer);
 
 	/* Partially parse the SDP to find ICE credentials and the mid for the bundle m-line */
@@ -684,13 +737,15 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 		}
 		WHIP_LOG(LOG_INFO, WHIP_PREFIX "Resource URL: %s\n", resource_url);
 	}
-	/* Now that we know the resource url, prepare the timer to send trickle candidates:
-	 * since most candidates will be local, rather than sending an HTTP PATCH message as
-	 * soon as we're aware of it, we queue it, and we send a (grouped) message every ~100ms */
-	GSource *patch_timer = g_timeout_source_new(100);
-	g_source_set_callback(patch_timer, whip_send_candidates, NULL, NULL);
-	g_source_attach(patch_timer, NULL);
-	g_source_unref(patch_timer);
+	if(!no_trickle) {
+		/* Now that we know the resource url, prepare the timer to send trickle candidates:
+		 * since most candidates will be local, rather than sending an HTTP PATCH message as
+		 * soon as we're aware of it, we queue it, and we send a (grouped) message every ~100ms */
+		GSource *patch_timer = g_timeout_source_new(100);
+		g_source_set_callback(patch_timer, whip_send_candidates, NULL, NULL);
+		g_source_attach(patch_timer, NULL);
+		g_source_unref(patch_timer);
+	}
 
 	/* Process the SDP answer */
 	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Received SDP answer (%zu bytes)\n", strlen(answer));
