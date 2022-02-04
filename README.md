@@ -1,7 +1,7 @@
 Simple WHIP Client
 ==================
 
-This is an attempt to create a simple prototype of a [WHIP client](https://www.ietf.org/archive/id/draft-ietf-wish-whip-01.html), to be used mostly for testing with my [Simple WHIP Server](https://github.com/meetecho/simple-whip-server) (based on [Janus](https://github.com/meetecho/janus-gateway/)), as well as interoperability testing with other WHIP implementations. As such, it's very early stages, and mostly meant as a playground for interested developers.
+This is a prototype implementation of a [WHIP client](https://www.ietf.org/archive/id/draft-ietf-wish-whip-01.html), developed by [Meetecho](https://www.meetecho.com). While it was initially conceived to be used mostly for testing with [Simple WHIP Server](https://github.com/meetecho/simple-whip-server) (based on [Janus](https://github.com/meetecho/janus-gateway/)), as a standard WHIP implementation it's supposed to interoperate just as well with other WHIP implementations (check [this presentation](https://github.com/IETF-Hackathon/ietf112-project-presentations/blob/main/ietf112-hackathon-whip.pdf) for some interoperability considerations).
 
 # Building the WHIP client
 
@@ -48,7 +48,7 @@ Application Options:
 The WHIP client requires at least two arguments:
 
 1. the WHIP endpoint to publish to (e.g., an endpoint created in the [Simple WHIP Server](https://github.com/meetecho/simple-whip-server));
-2. the partial GStreamer pipeline to use for audio, if audio needs to be sent;
+2. the partial GStreamer pipeline to use for audio, if audio needs to be sent, and or
 3. the partial GStreamer pipeline to use for video, if video needs to be sent.
 
 Audio and video are both optional, but at least one of the two must be enabled.
