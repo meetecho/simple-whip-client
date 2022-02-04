@@ -27,7 +27,7 @@ RUN apt-get update --allow-releaseinfo-change && \
 
 WORKDIR /opt
 
-RUN git clone https://github.com/lminiero/simple-whip-client.git && cd simple-whip-client && make
+RUN git clone https://github.com/meetecho/simple-whip-client.git && cd simple-whip-client && make
 
 WORKDIR /opt/simple-whip-client
 
