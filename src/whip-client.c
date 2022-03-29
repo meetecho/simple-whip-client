@@ -57,8 +57,8 @@ static char *auto_stun_server = NULL, **auto_turn_server = NULL;
 
 /* API properties */
 static enum whip_state state = 0;
-static const char *server_url = NULL, *token = NULL;
-static char *resource_url = NULL, *latest_etag = NULL;
+static const char *server_url = NULL, *token = NULL, *eos_sink_name = NULL;
+static char *resource_url = NULL, *latest_etag = NULL;;
 
 /* Trickle ICE management */
 static char *ice_ufrag = NULL, *ice_pwd = NULL, *first_mid = NULL;
@@ -129,6 +129,7 @@ static GOptionEntry opt_entries[] = {
 	{ "log-level", 'l', 0, G_OPTION_ARG_INT, &whip_log_level, "Logging level (0=disable logging, 7=maximum log level; default: 4)", NULL },
 	{ "disable-colors", 'o', 0, G_OPTION_ARG_NONE, &disable_colors, "Disable colors in the logging (default: enabled)", NULL },
 	{ "log-timestamps", 'L', 0, G_OPTION_ARG_NONE, &whip_log_timestamps, "Enable logging timestamps (default: disabled)", NULL },
+	{ "eos-sink-name", 'e', 0, G_OPTION_ARG_STRING, &eos_sink_name, "GStreamer sink name for EOS signal", NULL },
 	{ NULL },
 };
 
@@ -325,6 +326,23 @@ static void whip_options(void) {
 	WHIP_LOG(LOG_INFO, "\n");
 }
 
+static gboolean source_events(GstPad *pad, GstObject *parent, GstEvent *event) {
+	gboolean ret;
+
+	switch(GST_EVENT_TYPE(event)) {
+		case GST_EVENT_EOS:
+			ret = gst_pad_event_default(pad, parent, event);
+			whip_disconnect("Shutting down (EOS)");
+			break;
+		default: {
+			ret = gst_pad_event_default(pad, parent, event);
+			break;
+		}
+	}
+
+	return ret;
+}
+
 /* Helper method to initialize the GStreamer WebRTC stack */
 static gboolean whip_initialize(void) {
 	/* Prepare the pipeline, using the info we got from the command line */
@@ -351,6 +369,13 @@ static gboolean whip_initialize(void) {
 		WHIP_LOG(LOG_ERR, "Failed to parse/launch the pipeline: %s\n", error->message);
 		g_error_free(error);
 		goto err;
+	}
+
+	if(eos_sink_name != NULL) {
+		GstElement *eossrc = gst_bin_get_by_name(GST_BIN(pipeline), eos_sink_name);
+		GstPad *sinkpad = gst_element_get_static_pad(eossrc, "sink");
+		gst_pad_set_event_function(sinkpad, source_events);
+		gst_object_unref(sinkpad);
 	}
 
 	/* Get a pointer to the PeerConnection object */
