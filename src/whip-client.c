@@ -59,7 +59,7 @@ static char *auto_stun_server = NULL, **auto_turn_server = NULL;
 
 /* API properties */
 static enum whip_state state = 0;
-static const char *server_url = NULL, *token = NULL;
+static const char *server_url = NULL, *token = NULL, *eos_sink_name = NULL;
 static char *resource_url = NULL;
 
 /* Trickle ICE management */
@@ -129,6 +129,7 @@ static GOptionEntry opt_entries[] = {
 	{ "turn-server", 'T', 0, G_OPTION_ARG_STRING_ARRAY, &turn_server, "TURN server to use, if any; can be called multiple times (turn(s)://username:password@host:port?transport=[udp,tcp])", NULL },
 	{ "force-turn", 'F', 0, G_OPTION_ARG_NONE, &force_turn, "In case TURN servers are provided, force using a relay (default: false)", NULL },
 	{ "log-level", 'l', 0, G_OPTION_ARG_INT, &whip_log_level, "Logging level (0=disable logging, 7=maximum log level; default: 4)", NULL },
+	{ "eos-sink-name", 'E', 0, G_OPTION_ARG_STRING, &eos_sink_name, "GStreamer sink name for EOS signal", NULL },
 	{ NULL },
 };
 
@@ -322,13 +323,34 @@ static void whip_options(void) {
 	WHIP_LOG(LOG_INFO, "\n");
 }
 
+static gboolean source_events(GstPad* pad,
+														GstObject* parent,
+														GstEvent* event) {
+	gboolean ret;
+
+	switch (GST_EVENT_TYPE(event)) {
+		case GST_EVENT_EOS:
+			ret = gst_pad_event_default (pad, parent, event);
+			// g_print("source_events:GST_EVENT_EOS\n");
+			whip_disconnect("Shutting down");
+			break;
+		default: {
+			// g_print("source_events:default Got event %s\n", gst_event_type_get_name(GST_EVENT_TYPE(event)));
+			ret = gst_pad_event_default (pad, parent, event);
+			break;
+		}
+	}
+
+	return ret;
+}
+
 static gboolean pipeline_bus_callback(GstBus *bus, GstMessage *message) {
 	switch (GST_MESSAGE_TYPE (message)) {
 		case GST_MESSAGE_ERROR: {
 			GError *err;
 			gchar *debug;
 			gst_message_parse_error(message, &err, &debug);
-			g_print("pipeline_bus_callback:GST_MESSAGE_ERROR Error/code : %s/%d\n", err->message, err->code);
+			// g_print("pipeline_bus_callback:GST_MESSAGE_ERROR Error/code : %s/%d\n", err->message, err->code);
 			whip_disconnect("Shutting down");
 			g_error_free(err);
 			g_free(debug);
@@ -336,11 +358,11 @@ static gboolean pipeline_bus_callback(GstBus *bus, GstMessage *message) {
 			break;
 		}
 		case GST_MESSAGE_EOS: {
-			g_print("pipeline_bus_callback:GST_MESSAGE_EOS \n");
+			//g_print("pipeline_bus_callback:GST_MESSAGE_EOS \n");
 			return FALSE;
 		}
 		default: {
-			g_print("pipeline_bus_callback:default Got %s message \n", GST_MESSAGE_TYPE_NAME (message));
+			//g_print("pipeline_bus_callback:default Got %s message \n", GST_MESSAGE_TYPE_NAME (message));
 			break;
 		}
 	}
@@ -379,6 +401,13 @@ static gboolean whip_initialize(void) {
 	gst_bus_enable_sync_message_emission(bus);
 	gst_bus_set_sync_handler(bus, (GstBusSyncHandler) pipeline_bus_callback, NULL, NULL);
 	gst_object_unref(GST_OBJECT(bus));
+
+	if(eos_sink_name != NULL) {
+		GstElement* src = gst_bin_get_by_name(GST_BIN(pipeline), eos_sink_name);
+		GstPad* sinkpad = gst_element_get_static_pad(src, "sink");
+		gst_pad_set_event_function(sinkpad, source_events);
+		gst_object_unref(sinkpad);
+	}
 
 	g_object_set(pipeline, "message-forward", TRUE, NULL);
 
