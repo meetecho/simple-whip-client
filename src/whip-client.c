@@ -344,31 +344,6 @@ static gboolean source_events(GstPad* pad,
 	return ret;
 }
 
-static gboolean pipeline_bus_callback(GstBus *bus, GstMessage *message) {
-	switch (GST_MESSAGE_TYPE (message)) {
-		case GST_MESSAGE_ERROR: {
-			GError *err;
-			gchar *debug;
-			gst_message_parse_error(message, &err, &debug);
-			// g_print("pipeline_bus_callback:GST_MESSAGE_ERROR Error/code : %s/%d\n", err->message, err->code);
-			whip_disconnect("Shutting down");
-			g_error_free(err);
-			g_free(debug);
-			return FALSE;
-			break;
-		}
-		case GST_MESSAGE_EOS: {
-			//g_print("pipeline_bus_callback:GST_MESSAGE_EOS \n");
-			return FALSE;
-		}
-		default: {
-			//g_print("pipeline_bus_callback:default Got %s message \n", GST_MESSAGE_TYPE_NAME (message));
-			break;
-		}
-	}
-	return TRUE;
-}
-
 /* Helper method to initialize the GStreamer WebRTC stack */
 static gboolean whip_initialize(void) {
 	/* Prepare the pipeline, using the info we got from the command line */
@@ -396,11 +371,6 @@ static gboolean whip_initialize(void) {
 		g_error_free(error);
 		goto err;
 	}
-
-	bus = gst_pipeline_get_bus(GST_PIPELINE(pipeline));
-	gst_bus_enable_sync_message_emission(bus);
-	gst_bus_set_sync_handler(bus, (GstBusSyncHandler) pipeline_bus_callback, NULL, NULL);
-	gst_object_unref(GST_OBJECT(bus));
 
 	if(eos_sink_name != NULL) {
 		GstElement* src = gst_bin_get_by_name(GST_BIN(pipeline), eos_sink_name);
