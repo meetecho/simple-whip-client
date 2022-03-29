@@ -129,7 +129,7 @@ static GOptionEntry opt_entries[] = {
 	{ "log-level", 'l', 0, G_OPTION_ARG_INT, &whip_log_level, "Logging level (0=disable logging, 7=maximum log level; default: 4)", NULL },
 	{ "disable-colors", 'o', 0, G_OPTION_ARG_NONE, &disable_colors, "Disable colors in the logging (default: enabled)", NULL },
 	{ "log-timestamps", 'L', 0, G_OPTION_ARG_NONE, &whip_log_timestamps, "Enable logging timestamps (default: disabled)", NULL },
-  { "eos-sink-name", 'e', 0, G_OPTION_ARG_STRING, &eos_sink_name, "GStreamer sink name for EOS signal", NULL },
+	{ "eos-sink-name", 'e', 0, G_OPTION_ARG_STRING, &eos_sink_name, "GStreamer sink name for EOS signal", NULL },
 	{ NULL },
 };
 
