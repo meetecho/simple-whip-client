@@ -372,8 +372,8 @@ static gboolean whip_initialize(void) {
 	}
 
 	if(eos_sink_name != NULL) {
-		GstElement* src = gst_bin_get_by_name(GST_BIN(pipeline), eos_sink_name);
-		GstPad* sinkpad = gst_element_get_static_pad(src, "sink");
+		GstElement *eossrc = gst_bin_get_by_name(GST_BIN(pipeline), eos_sink_name);
+		GstPad *sinkpad = gst_element_get_static_pad(eossrc, "sink");
 		gst_pad_set_event_function(sinkpad, source_events);
 		gst_object_unref(sinkpad);
 	}
