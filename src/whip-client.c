@@ -50,7 +50,6 @@ enum whip_state {
 /* Global properties */
 static GMainLoop *loop = NULL;
 static GstElement *pipeline = NULL, *pc = NULL;
-static GstBus *bus = NULL;
 static const char *audio_pipe = NULL, *video_pipe = NULL;
 static gboolean no_trickle = FALSE, gathering_done = FALSE,
 	follow_link = FALSE, force_turn = FALSE;
