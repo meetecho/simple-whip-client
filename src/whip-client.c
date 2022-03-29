@@ -128,7 +128,7 @@ static GOptionEntry opt_entries[] = {
 	{ "turn-server", 'T', 0, G_OPTION_ARG_STRING_ARRAY, &turn_server, "TURN server to use, if any; can be called multiple times (turn(s)://username:password@host:port?transport=[udp,tcp])", NULL },
 	{ "force-turn", 'F', 0, G_OPTION_ARG_NONE, &force_turn, "In case TURN servers are provided, force using a relay (default: false)", NULL },
 	{ "log-level", 'l', 0, G_OPTION_ARG_INT, &whip_log_level, "Logging level (0=disable logging, 7=maximum log level; default: 4)", NULL },
-	{ "eos-sink-name", 'E', 0, G_OPTION_ARG_STRING, &eos_sink_name, "GStreamer sink name for EOS signal", NULL },
+	{ "eos-sink-name", 'e', 0, G_OPTION_ARG_STRING, &eos_sink_name, "GStreamer sink name for EOS signal", NULL },
 	{ NULL },
 };
 
@@ -322,20 +322,16 @@ static void whip_options(void) {
 	WHIP_LOG(LOG_INFO, "\n");
 }
 
-static gboolean source_events(GstPad* pad,
-														GstObject* parent,
-														GstEvent* event) {
+static gboolean source_events(GstPad *pad, GstObject *parent, GstEvent *event) {
 	gboolean ret;
 
-	switch (GST_EVENT_TYPE(event)) {
+	switch(GST_EVENT_TYPE(event)) {
 		case GST_EVENT_EOS:
-			ret = gst_pad_event_default (pad, parent, event);
-			// g_print("source_events:GST_EVENT_EOS\n");
-			whip_disconnect("Shutting down");
+			ret = gst_pad_event_default(pad, parent, event);
+			whip_disconnect("Shutting down (EOS)");
 			break;
 		default: {
-			// g_print("source_events:default Got event %s\n", gst_event_type_get_name(GST_EVENT_TYPE(event)));
-			ret = gst_pad_event_default (pad, parent, event);
+			ret = gst_pad_event_default(pad, parent, event);
 			break;
 		}
 	}
@@ -377,8 +373,6 @@ static gboolean whip_initialize(void) {
 		gst_pad_set_event_function(sinkpad, source_events);
 		gst_object_unref(sinkpad);
 	}
-
-	g_object_set(pipeline, "message-forward", TRUE, NULL);
 
 	/* Get a pointer to the PeerConnection object */
 	pc = gst_bin_get_by_name(GST_BIN(pipeline), "sendonly");
