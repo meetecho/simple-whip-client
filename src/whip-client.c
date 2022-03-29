@@ -31,8 +31,7 @@
 /* Logging */
 int whip_log_level = LOG_INFO;
 gboolean whip_log_timestamps = FALSE;
-gboolean whip_log_colors = TRUE;
-#define WHIP_PREFIX ANSI_COLOR_CYAN"[WHIP]"ANSI_COLOR_RESET" "
+gboolean whip_log_colors = TRUE, disable_colors = FALSE;
 
 /* State management */
 enum whip_state {
@@ -128,6 +127,8 @@ static GOptionEntry opt_entries[] = {
 	{ "turn-server", 'T', 0, G_OPTION_ARG_STRING_ARRAY, &turn_server, "TURN server to use, if any; can be called multiple times (turn(s)://username:password@host:port?transport=[udp,tcp])", NULL },
 	{ "force-turn", 'F', 0, G_OPTION_ARG_NONE, &force_turn, "In case TURN servers are provided, force using a relay (default: false)", NULL },
 	{ "log-level", 'l', 0, G_OPTION_ARG_INT, &whip_log_level, "Logging level (0=disable logging, 7=maximum log level; default: 4)", NULL },
+	{ "disable-colors", 'o', 0, G_OPTION_ARG_NONE, &disable_colors, "Disable colors in the logging (default: enabled)", NULL },
+	{ "log-timestamps", 'L', 0, G_OPTION_ARG_NONE, &whip_log_timestamps, "Enable logging timestamps (default: disabled)", NULL },
 	{ NULL },
 };
 
@@ -160,6 +161,8 @@ int main(int argc, char *argv[]) {
 		whip_log_level = 0;
 	else if(whip_log_level > LOG_MAX)
 		whip_log_level = LOG_MAX;
+	if(disable_colors)
+		whip_log_colors = FALSE;
 
 	/* Handle SIGINT (CTRL-C), SIGTERM (from service managers) */
 	signal(SIGINT, whip_handle_signal);
@@ -229,7 +232,7 @@ int main(int argc, char *argv[]) {
 	/* We're done */
 	if(pipeline) {
 		gst_element_set_state(GST_ELEMENT(pipeline), GST_STATE_NULL);
-		WHIP_LOG(LOG_INFO, WHIP_PREFIX "GStreamer pipeline stopped\n");
+		WHIP_PREFIX(LOG_INFO, "GStreamer pipeline stopped\n");
 		gst_object_unref(pipeline);
 	}
 
@@ -310,7 +313,7 @@ static void whip_options(void) {
 	if(link == NULL) {
 		WHIP_LOG(LOG_WARN, "No Link headers in OPTIONS response\n");
 	} else {
-		WHIP_LOG(LOG_INFO, WHIP_PREFIX "Auto configuration of STUN/TURN servers:\n");
+		WHIP_PREFIX(LOG_INFO, "Auto configuration of STUN/TURN servers:\n");
 		int i = 0;
 		gchar **links = g_strsplit(link, ", ", -1);
 		while(links[i] != NULL) {
@@ -341,7 +344,7 @@ static gboolean whip_initialize(void) {
 		(force_turn ? "ice-transport-policy=relay" : ""),
 		stun, turn, video, audio);
 	/* Launch the pipeline */
-	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Initializing the GStreamer pipeline:\n%s\n", gst_pipeline);
+	WHIP_PREFIX(LOG_INFO, "Initializing the GStreamer pipeline:\n%s\n", gst_pipeline);
 	GError *error = NULL;
 	pipeline = gst_parse_launch(gst_pipeline, &error);
 	if(error) {
@@ -385,7 +388,7 @@ static gboolean whip_initialize(void) {
 	/* Lifetime is the same as the pipeline itself */
 	gst_object_unref(pc);
 
-	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Starting the GStreamer pipeline\n");
+	WHIP_PREFIX(LOG_INFO, "Starting the GStreamer pipeline\n");
 	GstStateChangeReturn ret = gst_element_set_state(GST_ELEMENT(pipeline), GST_STATE_PLAYING);
 	if(ret == GST_STATE_CHANGE_FAILURE) {
 		WHIP_LOG(LOG_ERR, "Failed to set the pipeline state to playing\n");
@@ -411,7 +414,7 @@ static void whip_negotiation_needed(GstElement *element, gpointer user_data) {
 		WHIP_LOG(LOG_WARN, "GStreamer trying to create a new offer, but we don't support renegotiations yet...\n");
 		return;
 	}
-	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Creating offer\n");
+	WHIP_PREFIX(LOG_INFO, "Creating offer\n");
 	state = WHIP_STATE_OFFER_PREPARED;
 	GstPromise *promise = gst_promise_new_with_change_func(whip_offer_available, user_data, NULL);
 	g_signal_emit_by_name(pc, "create-offer", NULL, promise);
@@ -420,7 +423,7 @@ static void whip_negotiation_needed(GstElement *element, gpointer user_data) {
 /* Callback invoked when we have an SDP offer ready to be sent */
 static GstWebRTCSessionDescription *offer = NULL;
 static void whip_offer_available(GstPromise *promise, gpointer user_data) {
-	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Offer created\n");
+	WHIP_PREFIX(LOG_INFO, "Offer created\n");
 	/* Make sure we're in the right state */
 	g_assert_cmphex(state, ==, WHIP_STATE_OFFER_PREPARED);
 	g_assert_cmphex(gst_promise_wait(promise), ==, GST_PROMISE_RESULT_REPLIED);
@@ -429,7 +432,7 @@ static void whip_offer_available(GstPromise *promise, gpointer user_data) {
 	gst_promise_unref(promise);
 
 	/* Set the local description locally */
-	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Setting local description\n");
+	WHIP_PREFIX(LOG_INFO, "Setting local description\n");
 	promise = gst_promise_new();
 	g_signal_emit_by_name(pc, "set-local-description", offer, promise);
 	gst_promise_interrupt(promise);
@@ -493,7 +496,7 @@ static gboolean whip_send_candidates(gpointer user_data) {
 	}
 	char *candidate = NULL;
 	while((candidate = g_async_queue_try_pop(candidates)) != NULL) {
-		WHIP_LOG(LOG_VERB, WHIP_PREFIX "Sending candidates: %s\n", candidate);
+		WHIP_PREFIX(LOG_VERB, "Sending candidates: %s\n", candidate);
 		g_strlcat(fragment, "a=", sizeof(fragment));
 		g_strlcat(fragment, candidate, sizeof(fragment));
 		g_strlcat(fragment, "\r\n", sizeof(fragment));
@@ -525,13 +528,13 @@ static void whip_connection_state(GstElement *webrtc, GParamSpec *pspec,
 	g_object_get(webrtc, "connection-state", &state, NULL);
 	switch(state) {
 		case 1:
-			WHIP_LOG(LOG_INFO, WHIP_PREFIX "PeerConnection connecting...\n");
+			WHIP_PREFIX(LOG_INFO, "PeerConnection connecting...\n");
 			break;
 		case 2:
-			WHIP_LOG(LOG_INFO, WHIP_PREFIX "PeerConnection connected\n");
+			WHIP_PREFIX(LOG_INFO, "PeerConnection connected\n");
 			break;
 		case 4:
-			WHIP_LOG(LOG_ERR, WHIP_PREFIX "PeerConnection failed\n");
+			WHIP_PREFIX(LOG_ERR, "PeerConnection failed\n");
 			whip_disconnect("PeerConnection failed");
 			break;
 		case 0:
@@ -550,10 +553,10 @@ static void whip_ice_gathering_state(GstElement *webrtc, GParamSpec *pspec,
 	g_object_get(webrtc, "ice-gathering-state", &state, NULL);
 	switch(state) {
 		case 1:
-			WHIP_LOG(LOG_INFO, WHIP_PREFIX "ICE gathering started...\n");
+			WHIP_PREFIX(LOG_INFO, "ICE gathering started...\n");
 			break;
 		case 2:
-			WHIP_LOG(LOG_INFO, WHIP_PREFIX "ICE gathering completed\n");
+			WHIP_PREFIX(LOG_INFO, "ICE gathering completed\n");
 			/* Send an a=end-of-candidates trickle */
 			g_async_queue_push(candidates, g_strdup("end-of-candidates"));
 			gathering_done = TRUE;
@@ -576,16 +579,16 @@ static void whip_ice_connection_state(GstElement *webrtc, GParamSpec *pspec,
 	g_object_get(webrtc, "ice-connection-state", &state, NULL);
 	switch(state) {
 		case 1:
-			WHIP_LOG(LOG_INFO, WHIP_PREFIX "ICE connecting...\n");
+			WHIP_PREFIX(LOG_INFO, "ICE connecting...\n");
 			break;
 		case 2:
-			WHIP_LOG(LOG_INFO, WHIP_PREFIX "ICE connected\n");
+			WHIP_PREFIX(LOG_INFO, "ICE connected\n");
 			break;
 		case 3:
-			WHIP_LOG(LOG_INFO, WHIP_PREFIX "ICE completed\n");
+			WHIP_PREFIX(LOG_INFO, "ICE completed\n");
 			break;
 		case 4:
-			WHIP_LOG(LOG_ERR, WHIP_PREFIX "ICE failed\n");
+			WHIP_PREFIX(LOG_ERR, "ICE failed\n");
 			whip_disconnect("ICE failed");
 			break;
 		case 0:
@@ -603,18 +606,18 @@ static void whip_dtls_connection_state(GstElement *dtls, GParamSpec *pspec,
 	g_object_get(dtls, "connection-state", &state, NULL);
 	switch(state) {
 		case 1:
-			WHIP_LOG(LOG_INFO, WHIP_PREFIX "DTLS connection closed\n");
+			WHIP_PREFIX(LOG_INFO, "DTLS connection closed\n");
 			whip_disconnect("PeerConnection closed");
 			break;
 		case 2:
-			WHIP_LOG(LOG_ERR, WHIP_PREFIX "DTLS failed\n");
+			WHIP_PREFIX(LOG_ERR, "DTLS failed\n");
 			whip_disconnect("DTLS failed");
 			break;
 		case 3:
-			WHIP_LOG(LOG_INFO, WHIP_PREFIX "DTLS connecting...\n");
+			WHIP_PREFIX(LOG_INFO, "DTLS connecting...\n");
 			break;
 		case 4:
-			WHIP_LOG(LOG_INFO, WHIP_PREFIX "DTLS connected\n");
+			WHIP_PREFIX(LOG_INFO, "DTLS connected\n");
 			break;
 		default:
 			/* We don't care (we should in case of restarts?) */
@@ -626,7 +629,7 @@ static void whip_dtls_connection_state(GstElement *dtls, GParamSpec *pspec,
 static void whip_connect(GstWebRTCSessionDescription *offer) {
 	/* Convert the SDP object to a string */
 	char *sdp_offer = gst_sdp_message_as_text(offer->sdp);
-	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Sending SDP offer (%zu bytes)\n", strlen(sdp_offer));
+	WHIP_PREFIX(LOG_INFO, "Sending SDP offer (%zu bytes)\n", strlen(sdp_offer));
 
 	/* If we're not trickling, add our candidates to the SDP */
 	if(no_trickle) {
@@ -636,7 +639,7 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 		expanded_sdp[0] = '\0';
 		char *candidate = NULL;
 		while((candidate = g_async_queue_try_pop(candidates)) != NULL) {
-			WHIP_LOG(LOG_VERB, WHIP_PREFIX "Adding candidate to SDP: %s\n", candidate);
+			WHIP_PREFIX(LOG_VERB, "Adding candidate to SDP: %s\n", candidate);
 			g_strlcat(attributes, "a=", sizeof(attributes));
 			g_strlcat(attributes, candidate, sizeof(attributes));
 			g_strlcat(attributes, "\r\n", sizeof(attributes));
@@ -743,7 +746,7 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 			resource_url = soup_uri_to_string(uri, FALSE);
 			soup_uri_free(uri);
 		}
-		WHIP_LOG(LOG_INFO, WHIP_PREFIX "Resource URL: %s\n", resource_url);
+		WHIP_PREFIX(LOG_INFO, "Resource URL: %s\n", resource_url);
 	}
 	if(!no_trickle) {
 		/* Now that we know the resource url, prepare the timer to send trickle candidates:
@@ -756,7 +759,7 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 	}
 
 	/* Process the SDP answer */
-	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Received SDP answer (%zu bytes)\n", strlen(answer));
+	WHIP_PREFIX(LOG_INFO, "Received SDP answer (%zu bytes)\n", strlen(answer));
 	WHIP_LOG(LOG_VERB, "%s\n", answer);
 
 	/* Check if there are any candidates in the SDP: we'll need to fake trickles in case */
@@ -805,7 +808,7 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 	GstWebRTCSessionDescription *gst_sdp = gst_webrtc_session_description_new(GST_WEBRTC_SDP_TYPE_ANSWER, sdp);
 
 	/* Set remote description on our pipeline */
-	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Setting remote description\n");
+	WHIP_PREFIX(LOG_INFO, "Setting remote description\n");
 	GstPromise *promise = gst_promise_new();
 	g_signal_emit_by_name(pc, "set-remote-description", gst_sdp, promise);
 	gst_promise_interrupt(promise);
@@ -817,7 +820,7 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 static void whip_disconnect(char *reason) {
 	if(!g_atomic_int_compare_and_exchange(&disconnected, 0, 1))
 		return;
-	WHIP_LOG(LOG_INFO, WHIP_PREFIX "Disconnecting from server (%s)\n", reason);
+	WHIP_PREFIX(LOG_INFO, "Disconnecting from server (%s)\n", reason);
 	if(resource_url == NULL) {
 		/* FIXME Nothing to do? */
 		g_main_loop_quit(loop);
@@ -1001,7 +1004,7 @@ static gboolean whip_parse_offer(char *sdp_offer) {
 static void whip_process_link_header(char *link) {
 	if(link == NULL)
 		return;
-	WHIP_LOG(LOG_INFO, WHIP_PREFIX "  -- %s\n", link);
+	WHIP_PREFIX(LOG_INFO, "  -- %s\n", link);
 	if(strstr(link, "rel=\"ice-server\"") == NULL) {
 		WHIP_LOG(LOG_WARN, "Missing 'rel=\"ice-server\"' attribute, skipping...\n");
 		return;
@@ -1022,7 +1025,7 @@ static void whip_process_link_header(char *link) {
 			auto_stun_server = g_strdup(address);
 		}
 		g_clear_pointer(&parts, g_strfreev);
-		WHIP_LOG(LOG_INFO, WHIP_PREFIX "  -- -- %s\n", auto_stun_server);
+		WHIP_PREFIX(LOG_INFO, "  -- -- %s\n", auto_stun_server);
 		return;
 	} else if(strstr(link, "turn:") == link || strstr(link, "turns:") == link) {
 		/* TURN server */
@@ -1070,7 +1073,7 @@ static void whip_process_link_header(char *link) {
 			g_snprintf(address, sizeof(address), "%s://%s",
 				turns ? "turns" : "turn", host);
 		}
-		WHIP_LOG(LOG_INFO, WHIP_PREFIX "  -- -- %s\n", address);
+		WHIP_PREFIX(LOG_INFO, "  -- -- %s\n", address);
 		g_free(username);
 		g_free(credential);
 		/* Add to the list of TURN servers */

@@ -61,6 +61,12 @@ static const char *whip_log_prefix[] = {
 	"",
 	""
 };
+static const char *whip_name_prefix[] = {
+/* no colors */
+	"[WHIP] ",
+/* with colors */
+	ANSI_COLOR_CYAN"[WHIP]"ANSI_COLOR_RESET" "
+};
 
 /* Simple wrapper to g_print/printf */
 #define WHIP_PRINT g_print
@@ -84,6 +90,32 @@ do { \
 			         "[%s:%s:%d] ", __FILE__, __FUNCTION__, __LINE__); \
 		} \
 		g_print("%s%s%s" format, \
+		        whip_log_ts, \
+		        whip_log_prefix[level | ((int)whip_log_colors << 3)], \
+		        whip_log_src, \
+		        ##__VA_ARGS__); \
+	} \
+} while (0)
+
+/* Same as above, but with a [WHIP] prefix */
+#define WHIP_PREFIX(level, format, ...) \
+do { \
+	if (level > LOG_NONE && level <= LOG_MAX && level <= whip_log_level) { \
+		char whip_log_ts[64] = ""; \
+		char whip_log_src[128] = ""; \
+		if (whip_log_timestamps) { \
+			struct tm whiptmresult; \
+			time_t whipltime = time(NULL); \
+			localtime_r(&whipltime, &whiptmresult); \
+			strftime(whip_log_ts, sizeof(whip_log_ts), \
+			         "[%a %b %e %T %Y] ", &whiptmresult); \
+		} \
+		if (level == LOG_FATAL || level == LOG_ERR || level == LOG_DBG) { \
+			snprintf(whip_log_src, sizeof(whip_log_src), \
+			         "[%s:%s:%d] ", __FILE__, __FUNCTION__, __LINE__); \
+		} \
+		g_print("%s%s%s%s" format, \
+		        whip_name_prefix[whip_log_colors], \
 		        whip_log_ts, \
 		        whip_log_prefix[level | ((int)whip_log_colors << 3)], \
 		        whip_log_src, \
