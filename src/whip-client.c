@@ -59,7 +59,7 @@ static char *auto_stun_server = NULL, **auto_turn_server = NULL;
 /* API properties */
 static enum whip_state state = 0;
 static const char *server_url = NULL, *token = NULL, *eos_sink_name = NULL;
-static char *resource_url = NULL;
+static char *resource_url = NULL, *latest_etag = NULL;;
 
 /* Trickle ICE management */
 static char *ice_ufrag = NULL, *ice_pwd = NULL, *first_mid = NULL;
@@ -235,6 +235,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	g_free(resource_url);
+	g_free(latest_etag);
 	g_free(ice_ufrag);
 	g_free(ice_pwd);
 	g_free(first_mid);
@@ -726,6 +727,13 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 		whip_disconnect("SDP error");
 		return;
 	}
+	/* Check if there's an ETag we should send in upcoming requests */
+	const char *etag = soup_message_headers_get_one(session.msg->response_headers, "etag");
+	if(etag == NULL) {
+		WHIP_LOG(LOG_WARN, "No ETag header, won't be able to set If-Match when trickling\n");
+	} else {
+		latest_etag = g_strdup(etag);
+	}
 	/* Parse the location header to populate the resource url */
 	const char *location = soup_message_headers_get_one(session.msg->response_headers, "location");
 	if(location == NULL) {
@@ -875,6 +883,10 @@ static guint whip_http_send(whip_http_session *session, char *method,
 		char auth[1024];
 		g_snprintf(auth, sizeof(auth), "Bearer %s", token);
 		soup_message_headers_append(session->msg->request_headers, "Authorization", auth);
+	}
+	if(latest_etag != NULL) {
+		/* Add an If-Match header too with the available ETag */
+		soup_message_headers_append(session->msg->request_headers, "If-Match", latest_etag);
 	}
 	/* Send the message synchronously */
 	guint status = soup_session_send_message(session->http_conn, session->msg);
