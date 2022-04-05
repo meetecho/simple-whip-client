@@ -54,6 +54,7 @@ static gboolean no_trickle = FALSE, gathering_done = FALSE,
 	follow_link = FALSE, force_turn = FALSE;
 static const char *stun_server = NULL, **turn_server = NULL;
 static char *auto_stun_server = NULL, **auto_turn_server = NULL;
+static int latency = -1;
 
 /* API properties */
 static enum whip_state state = 0;
@@ -130,6 +131,7 @@ static GOptionEntry opt_entries[] = {
 	{ "disable-colors", 'o', 0, G_OPTION_ARG_NONE, &disable_colors, "Disable colors in the logging (default: enabled)", NULL },
 	{ "log-timestamps", 'L', 0, G_OPTION_ARG_NONE, &whip_log_timestamps, "Enable logging timestamps (default: disabled)", NULL },
 	{ "eos-sink-name", 'e', 0, G_OPTION_ARG_STRING, &eos_sink_name, "GStreamer sink name for EOS signal", NULL },
+	{ "jitter-buffer", 'b', 0, G_OPTION_ARG_INT, &latency, "Jitter buffer (latency) to use in RTP, in milliseconds (default: -1, use webrtcbin's default)", NULL },
 	{ NULL },
 };
 
@@ -209,6 +211,8 @@ int main(int argc, char *argv[]) {
 	}
 	WHIP_LOG(LOG_INFO, "Audio pipeline: %s\n", audio_pipe ? audio_pipe : "(none)");
 	WHIP_LOG(LOG_INFO, "Video pipeline: %s\n\n", video_pipe ? video_pipe : "(none)");
+	if(latency > 1000)
+		WHIP_LOG(LOG_WARN, "Very high jitter-buffer latency configured (%u)\n", latency);
 
 	/* Initialize gstreamer */
 	gst_init(NULL, NULL);
@@ -407,6 +411,14 @@ static gboolean whip_initialize(void) {
 	g_signal_connect(pc, "notify::ice-connection-state", G_CALLBACK(whip_ice_connection_state), NULL);
 	/* Create a queue for gathered candidates */
 	candidates = g_async_queue_new_full((GDestroyNotify)g_free);
+
+	/* If a latency value has been passed as an argument, enforce it */
+	GstElement *rtpbin = gst_bin_get_by_name(GST_BIN(pc), "rtpbin");
+	if(latency >= 0)
+		g_object_set(rtpbin, "latency", latency, "buffer-mode", 0, NULL);
+	guint rtp_latency = 0;
+	g_object_get(rtpbin, "latency", &rtp_latency, NULL);
+	WHIP_PREFIX(LOG_INFO, "Configured jitter-buffer size (latency) for PeerConnection to %ums\n", rtp_latency);
 
 	/* Start the pipeline */
 	gst_element_set_state(pipeline, GST_STATE_READY);

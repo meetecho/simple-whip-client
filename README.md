@@ -43,6 +43,7 @@ Application Options:
   -l, --log-level          Logging level (0=disable logging, 7=maximum log level; default: 4)
   -o, --disable-colors     Disable colors in the logging (default: enabled)
   -L, --log-timestamps     Enable logging timestamps (default: disabled)
+  -b, --jitter-buffer      Jitter buffer (latency) to use in RTP, in milliseconds (default: -1, use webrtcbin's default)
 ```
 
 # Testing the WHIP client
