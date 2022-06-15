@@ -1046,13 +1046,18 @@ static void whip_process_link_header(char *link) {
 		WHIP_LOG(LOG_WARN, "Missing 'rel=\"ice-server\"' attribute, skipping...\n");
 		return;
 	}
+	gboolean brackets = FALSE;
+	if(*link == '<') {
+		link++;
+		brackets = TRUE;
+	}
 	if(strstr(link, "stun:") == link) {
 		/* STUN server */
 		if(auto_stun_server != NULL) {
 			WHIP_LOG(LOG_WARN, "Ignoring multiple STUN servers...\n");
 			return;
 		}
-		gchar **parts = g_strsplit(link, "; ", -1);
+		gchar **parts = g_strsplit(link, brackets ? ">; " : "; ", -1);
 		if(strstr(parts[0], "stun://") == parts[0]) {
 			/* Easy enough */
 			auto_stun_server = g_strdup(parts[0]);
@@ -1109,6 +1114,11 @@ static void whip_process_link_header(char *link) {
 		} else {
 			g_snprintf(address, sizeof(address), "%s://%s",
 				turns ? "turns" : "turn", host);
+		}
+		if(brackets) {
+			char *b = strstr(address, ">");
+			if(b)
+				*b = '\0';
 		}
 		WHIP_PREFIX(LOG_INFO, "  -- -- %s\n", address);
 		g_free(username);
