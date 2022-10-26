@@ -257,6 +257,8 @@ int main(int argc, char *argv[]) {
 	}
 	g_free(auto_turn_server);
 
+	gst_deinit();
+
 	WHIP_LOG(LOG_INFO, "\nBye!\n");
 	exit(0);
 }
@@ -419,11 +421,10 @@ static gboolean whip_initialize(void) {
 	guint rtp_latency = 0;
 	g_object_get(rtpbin, "latency", &rtp_latency, NULL);
 	WHIP_PREFIX(LOG_INFO, "Configured jitter-buffer size (latency) for PeerConnection to %ums\n", rtp_latency);
+	gst_object_unref(rtpbin);
 
 	/* Start the pipeline */
 	gst_element_set_state(pipeline, GST_STATE_READY);
-	/* Lifetime is the same as the pipeline itself */
-	gst_object_unref(pc);
 
 	WHIP_PREFIX(LOG_INFO, "Starting the GStreamer pipeline\n");
 	GstStateChangeReturn ret = gst_element_set_state(GST_ELEMENT(pipeline), GST_STATE_PLAYING);
@@ -478,6 +479,7 @@ static void whip_offer_available(GstPromise *promise, gpointer user_data) {
 	/* Now that a DTLS stack is available, try monitoring the DTLS state too */
 	GstElement *dtls = gst_bin_get_by_name(GST_BIN(pc), "dtlsdec0");
 	g_signal_connect(dtls, "notify::connection-state", G_CALLBACK(whip_dtls_connection_state), NULL);
+	gst_object_unref(dtls);
 
 	/* Now that the offer is ready, connect to the WHIP endpoint and send it there
 	 * (unless we're not tricking, in which case we wait for gathering to be
