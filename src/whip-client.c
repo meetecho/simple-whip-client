@@ -707,6 +707,12 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 		g_free(sdp_offer);
 		sdp_offer = g_strdup(expanded_sdp);
 	}
+	/* Turn sendrecv to sendonly, as some servers seem to barf on it otherwise */
+	char *sr = NULL;
+	const char *so = "sendonly";
+	while((sr = strstr(sdp_offer, "sendrecv")) != NULL)
+		memcpy(sr, so, 8);
+	/* Done */
 	WHIP_LOG(LOG_VERB, "%s\n", sdp_offer);
 
 	/* Partially parse the SDP to find ICE credentials and the mid for the bundle m-line */
