@@ -269,7 +269,6 @@ static gboolean whip_check_plugins(void) {
 	/* Note: since the pipeline is dynamic, there may be more requirements... */
 	const char *needed[] = {
 		"opus",
-		"x264",
 		"vpx",
 		"nice",
 		"webrtc",
