@@ -767,6 +767,7 @@ static void whip_connect(GstWebRTCSessionDescription *offer) {
 		} else {
 			/* Relative path */
 			SoupURI *uri = soup_uri_new(server_url);
+			soup_uri_set_query(uri, NULL);
 			if(location[0] == '/') {
 				/* Use the full returned path as new path */
 				soup_uri_set_path(uri, location);
@@ -928,6 +929,7 @@ static guint whip_http_send(whip_http_session *session, char *method,
 		} else {
 			/* Relative path */
 			SoupURI *uri = soup_uri_new(server_url);
+			soup_uri_set_query(uri, NULL);
 			soup_uri_set_path(uri, location);
 			session->redirect_url = soup_uri_to_string(uri, FALSE);
 			soup_uri_free(uri);
