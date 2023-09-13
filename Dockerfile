@@ -1,4 +1,4 @@
-FROM debian:sid AS builder
+FROM debian:bullseye AS builder
 
 RUN apt-get update --allow-releaseinfo-change && \
     apt-get install -y --no-install-recommends \
