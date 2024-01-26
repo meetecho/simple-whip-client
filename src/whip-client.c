@@ -944,11 +944,11 @@ static guint whip_http_send(whip_http_session *session, char *method,
 		/* Add an authorization header too */
 		char auth[1024];
 		g_snprintf(auth, sizeof(auth), "Bearer %s", token);
-		soup_message_headers_append(soup_message_get_response_headers(session->msg), "Authorization", auth);
+		soup_message_headers_append(soup_message_get_request_headers(session->msg), "Authorization", auth);
 	}
 	if(latest_etag != NULL) {
 		/* Add an If-Match header too with the available ETag */
-		soup_message_headers_append(soup_message_get_response_headers(session->msg), "If-Match", latest_etag);
+		soup_message_headers_append(soup_message_get_request_headers(session->msg), "If-Match", latest_etag);
 	}
 	/* Send the message synchronously */
 	GBytes *rb = NULL;
