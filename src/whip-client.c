@@ -32,6 +32,8 @@
 int whip_log_level = LOG_INFO;
 gboolean whip_log_timestamps = FALSE;
 gboolean whip_log_colors = TRUE, disable_colors = FALSE;
+const char *whip_debug_http = "none";
+SoupLoggerLogLevel soup_debug_level = SOUP_LOGGER_LOG_NONE;
 
 /* State management */
 enum whip_state {
@@ -130,6 +132,7 @@ static GOptionEntry opt_entries[] = {
 	{ "log-level", 'l', 0, G_OPTION_ARG_INT, &whip_log_level, "Logging level (0=disable logging, 7=maximum log level; default: 4)", NULL },
 	{ "disable-colors", 'o', 0, G_OPTION_ARG_NONE, &disable_colors, "Disable colors in the logging (default: enabled)", NULL },
 	{ "log-timestamps", 'L', 0, G_OPTION_ARG_NONE, &whip_log_timestamps, "Enable logging timestamps (default: disabled)", NULL },
+	{ "http-debugging", 'H', 0, G_OPTION_ARG_STRING, &whip_debug_http, "HTTP debugging level (none, minimal, headers, body; default: none)", NULL },
 	{ "eos-sink-name", 'e', 0, G_OPTION_ARG_STRING, &eos_sink_name, "GStreamer sink name for EOS signal", NULL },
 	{ "jitter-buffer", 'b', 0, G_OPTION_ARG_INT, &latency, "Jitter buffer (latency) to use in RTP, in milliseconds (default: -1, use webrtcbin's default)", NULL },
 	{ NULL },
@@ -213,6 +216,16 @@ int main(int argc, char *argv[]) {
 	WHIP_LOG(LOG_INFO, "Video pipeline: %s\n\n", video_pipe ? video_pipe : "(none)");
 	if(latency > 1000)
 		WHIP_LOG(LOG_WARN, "Very high jitter-buffer latency configured (%u)\n", latency);
+
+	/* Check if we need to enable libsoup logging */
+	if(whip_debug_http != NULL) {
+		if(!strcasecmp(whip_debug_http, "minimal"))
+			soup_debug_level = SOUP_LOGGER_LOG_MINIMAL;
+		else if(!strcasecmp(whip_debug_http, "headers"))
+			soup_debug_level = SOUP_LOGGER_LOG_HEADERS;
+		else if(!strcasecmp(whip_debug_http, "body"))
+			soup_debug_level = SOUP_LOGGER_LOG_BODY;
+	}
 
 	/* Initialize gstreamer */
 	gst_init(NULL, NULL);
@@ -932,6 +945,11 @@ static guint whip_http_send(whip_http_session *session, char *method,
 	}
 	/* Create an HTTP connection */
 	session->http_conn = soup_session_new();
+	if(soup_debug_level != SOUP_LOGGER_LOG_NONE) {
+		SoupLogger *logger = soup_logger_new(soup_debug_level);
+		soup_session_add_feature(session->http_conn, SOUP_SESSION_FEATURE(logger));
+		g_object_unref(logger);
+	}
 	session->msg = soup_message_new(method, session->redirect_url ? session->redirect_url : url);
 	soup_message_set_flags(session->msg, SOUP_MESSAGE_NO_REDIRECT);
 	g_signal_connect(session->msg, "accept-certificate", G_CALLBACK(whip_http_accept_certs), NULL);
