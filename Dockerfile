@@ -1,4 +1,4 @@
-FROM debian:bullseye AS builder
+FROM debian:bookworm AS builder
 
 RUN apt-get update --allow-releaseinfo-change && \
     apt-get install -y --no-install-recommends \
@@ -16,7 +16,7 @@ RUN apt-get update --allow-releaseinfo-change && \
         gstreamer1.0-plugins-good \
         libglib2.0-dev \
         libgstreamer-plugins-bad1.0-dev \
-        libsoup2.4-dev \
+        libsoup-3.0-dev \
         libjson-glib-dev \
         libgstreamer1.0-dev \
         libgstreamer-plugins-base1.0-dev \
