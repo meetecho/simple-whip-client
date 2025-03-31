@@ -378,7 +378,7 @@ static gboolean whip_initialize(void) {
 	g_snprintf(gst_pipeline, sizeof(gst_pipeline), "webrtcbin name=sendonly bundle-policy=%d %s %s %s %s %s",
 		(audio_pipe && video_pipe ? 3 : 0),
 		(force_turn ? "ice-transport-policy=relay" : ""),
-		stun, turn, video, audio);
+		stun, turn, audio, video);
 	/* Launch the pipeline */
 	WHIP_PREFIX(LOG_INFO, "Initializing the GStreamer pipeline:\n%s\n", gst_pipeline);
 	GError *error = NULL;
